@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, and pytest coverage. It does not include a database, file uploads, OCI integration, authentication, document extraction, or LLM calls.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, and pytest coverage. It does not include file uploads, OCI integration, authentication, document extraction, LLM calls, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -52,6 +52,40 @@ Expected response:
   "status": "ok",
   "service": "aud-generator-api"
 }
+```
+
+## Local Database
+
+The backend uses SQLAlchemy 2.x with SQLite for local development.
+
+Default database URL:
+
+```text
+sqlite:///./aud_generator.db
+```
+
+The app creates tables automatically on startup for local development. The SQLite database file is ignored by git.
+
+`create_all()` creates missing tables, but it does not alter existing tables when model columns change. Until Alembic migrations are introduced, either delete `aud_generator.db` during local development or manually add simple nullable columns when needed.
+
+To override the database URL for a local run:
+
+```powershell
+$env:DATABASE_URL = "sqlite:///./aud_generator.db"
+uvicorn app.main:app --reload
+```
+
+The same `DATABASE_URL` setting is the future switch point for Oracle Autonomous Database once that integration is introduced.
+
+## Current API Endpoints
+
+```text
+GET  /health
+POST /projects
+GET  /projects
+GET  /projects/{project_id}
+POST /projects/{project_id}/jobs
+GET  /projects/{project_id}/jobs
 ```
 
 ## Run Tests

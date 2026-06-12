@@ -1,21 +1,38 @@
+from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes_jobs import router as jobs_router
 from app.api.routes_health import router as health_router
+from app.api.routes_projects import router as projects_router
 from app.core.config import get_settings
+from app.db.session import create_db_and_tables
 
 
-def create_app() -> FastAPI:
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
+    create_db_and_tables()
+    yield
+
+
+def create_app(create_tables_on_startup: bool = True) -> FastAPI:
     settings = get_settings()
-    application = FastAPI(title=settings.APP_NAME)
+    application = FastAPI(
+        title=settings.APP_NAME,
+        lifespan=lifespan if create_tables_on_startup else None,
+    )
     application.add_middleware(
         CORSMiddleware,
         allow_origins=settings.BACKEND_CORS_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET"],
+        allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
     application.include_router(health_router)
+    application.include_router(projects_router)
+    application.include_router(jobs_router)
     return application
 
 
