@@ -7,6 +7,15 @@ Guidance for future Codex work in this repository.
 - Build iteratively. Do not attempt full AUD generation in one pass.
 - Keep the first milestones focused on a clean, testable application skeleton.
 - Treat FDD as the golden source once AUD generation logic exists. If FDD conflicts with PPT, transcript, configuration workbook, or supporting material, FDD wins.
+- After making any change,  review the code you just created.
+Check for:
+1. unnecessary complexity
+2. missing tests
+3. hardcoded paths
+4. poor error handling
+5. inconsistent naming
+6. anything that will make future OCI migration difficult
+Re-run and check health everytime, if there's any error in terminal, fix it automatically
 
 ## Current Boundaries
 
