@@ -45,3 +45,4 @@ Do not add these until explicitly requested:
 - Add tests when behavior is introduced.
 - Avoid committing generated artifacts, local environment files, caches, or dependency directories.
 - Update documentation when architectural decisions change.
+- After automatic tests or health checks, provide manual test steps with expected results for every change.

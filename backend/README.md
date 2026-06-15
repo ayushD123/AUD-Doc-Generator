@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, and pytest coverage. It does not include OCI integration, authentication, document extraction, LLM calls, AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, transcript extraction, DOCX extraction, and pytest coverage. It does not include OCI integration, authentication, LLM calls, AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -117,6 +117,7 @@ POST /projects/{project_id}/files
 GET  /projects/{project_id}/files
 POST /projects/{project_id}/jobs/classify-files
 POST /projects/{project_id}/jobs/extract-transcripts
+POST /projects/{project_id}/jobs/extract-docx
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
 GET  /projects/{project_id}/extracted-content
@@ -174,11 +175,17 @@ Create a plain text transcript extraction job:
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-transcripts"
 ```
 
+Create a DOCX extraction job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-docx"
+```
+
 Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts",
+  "job_type": "classify_files | extract_transcripts | extract_docx",
   "status": "pending",
   "progress": 0
 }
@@ -194,6 +201,7 @@ The worker picks pending local jobs and simulates processing:
 
 - `classify_files`: assigns uploaded file types from extensions.
 - `extract_transcripts`: reads `.txt` uploads only and stores extracted transcript text.
+- `extract_docx`: reads `.docx` uploads and stores extracted paragraphs, heading-like paragraphs, tables, comments when present, and basic metadata.
 
 Check job status:
 
@@ -215,8 +223,17 @@ Current simulated classification mapping:
 Current transcript extraction scope:
 
 - Only `.txt` files are read.
-- DOCX, PPTX, XLSX, PDF, media transcription, LLM calls, and AUD generation are not included yet.
+- PPTX, XLSX, PDF, media transcription, LLM calls, and AUD generation are not included yet.
 - Files are selected when `file_type` is `transcript_text` or the original filename ends in `.txt`.
+
+Current DOCX extraction scope:
+
+- Files are selected when `file_type` is `docx` or the original filename ends in `.docx`.
+- Paragraph and table text is extracted with `python-docx`.
+- Heading-like paragraphs are detected from paragraph style names such as `Heading 1`.
+- DOCX package comments are extracted from `word/comments.xml` when that part exists.
+- Extracted FDD files include `is_golden_source = true` in `json_content`.
+- This phase does not generate an AUD and does not call an LLM.
 
 Check extracted content:
 
@@ -232,6 +249,41 @@ title = original filename
 text_content = full text
 json_content = character_count and word_count
 ```
+
+Extracted DOCX records include:
+
+```text
+content_type = docx
+title = original filename
+text_content = extracted headings, paragraphs, and table rows
+json_content = headings, tables, comments, metadata, source_role, and optional is_golden_source
+```
+
+## Manual DOCX Extraction Test
+
+Start the API and upload an FDD DOCX:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects" `
+  -H "Content-Type: application/json" `
+  -d "{\"customer_name\":\"Vision Operations\",\"module_name\":\"Order Management\"}"
+```
+
+Copy the returned `id`, then run:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/files" `
+  -F "source_role=fdd" `
+  -F "file=@C:\path\to\fdd.docx"
+
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-docx"
+
+python -m app.workers.local_worker
+
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/extracted-content"
+```
+
+Confirm the extracted DOCX row has `content_type` set to `docx`, includes heading/table metadata, and has `is_golden_source` set to `true` for an FDD upload.
 
 ## Run Tests
 
