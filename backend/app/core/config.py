@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "aud-generator-api"
     ENVIRONMENT: str = "local"
     DATABASE_URL: str = "sqlite:///./aud_generator.db"
+    LOCAL_STORAGE_ROOT: str = "storage"
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",

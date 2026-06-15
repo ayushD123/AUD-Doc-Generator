@@ -34,6 +34,7 @@ pnpm-debug.log*
 *.sqlite3
 local_storage/
 uploads/
+backend/storage/
 
 # IDE and OS files
 .vscode/

@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, and pytest coverage. It does not include file uploads, OCI integration, authentication, document extraction, LLM calls, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, and pytest coverage. It does not include OCI integration, authentication, document extraction, LLM calls, AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -77,6 +77,35 @@ uvicorn app.main:app --reload
 
 The same `DATABASE_URL` setting is the future switch point for Oracle Autonomous Database once that integration is introduced.
 
+## Local File Storage
+
+Uploaded files are stored on the local filesystem for development:
+
+```text
+backend/storage/projects/{project_id}/uploads/
+```
+
+The database stores a relative storage key such as:
+
+```text
+projects/{project_id}/uploads/{generated_filename}.pdf
+```
+
+This keeps local storage behind a service class so it can later be replaced with OCI Object Storage without changing route behavior.
+
+Default storage root:
+
+```text
+storage
+```
+
+To override it:
+
+```powershell
+$env:LOCAL_STORAGE_ROOT = "storage"
+uvicorn app.main:app --reload
+```
+
 ## Current API Endpoints
 
 ```text
@@ -84,8 +113,46 @@ GET  /health
 POST /projects
 GET  /projects
 GET  /projects/{project_id}
+POST /projects/{project_id}/files
+GET  /projects/{project_id}/files
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
+```
+
+## File Upload Examples
+
+Upload an FDD file:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/files" `
+  -F "source_role=fdd" `
+  -F "file=@C:\path\to\document.docx"
+```
+
+Upload a supporting PDF:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/files" `
+  -F "source_role=supporting_doc" `
+  -F "file=@C:\path\to\supporting.pdf"
+```
+
+List uploaded files for a project:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/files"
+```
+
+Allowed file extensions:
+
+```text
+.docx, .pptx, .xlsx, .xlsm, .txt, .pdf, .m4a, .mp4
+```
+
+Allowed `source_role` values:
+
+```text
+template_aud, final_aud_sample, fdd, kt_ppt, kt_transcript, config_workbook, supporting_doc, unknown
 ```
 
 ## Run Tests

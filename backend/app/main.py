@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.routes_files import router as files_router
 from app.api.routes_jobs import router as jobs_router
 from app.api.routes_health import router as health_router
 from app.api.routes_projects import router as projects_router
@@ -33,6 +34,7 @@ def create_app(create_tables_on_startup: bool = True) -> FastAPI:
     application.include_router(health_router)
     application.include_router(projects_router)
     application.include_router(jobs_router)
+    application.include_router(files_router)
     return application
 
 
