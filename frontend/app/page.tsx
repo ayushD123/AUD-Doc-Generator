@@ -1,80 +1,204 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
+import { FormEvent, useEffect, useState } from "react";
 
-type HealthState = "idle" | "checking" | "ok" | "error";
+import {
+  createProject,
+  formatProjectDate,
+  listProjects,
+  type Project,
+} from "@/lib/projects";
 
-type HealthResponse = {
-  status: string;
-  service: string;
+type ProjectForm = {
+  customer_name: string;
+  module_name: string;
+  name: string;
+  email_id: string;
 };
 
-const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+const emptyForm: ProjectForm = {
+  customer_name: "",
+  module_name: "",
+  name: "",
+  email_id: "",
+};
+
+function optionalValue(value: string) {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
 
 export default function Home() {
-  const [healthState, setHealthState] = useState<HealthState>("idle");
-  const [message, setMessage] = useState("Backend health has not been checked yet.");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [form, setForm] = useState<ProjectForm>(emptyForm);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
-  async function checkBackendHealth() {
-    if (!apiBaseUrl) {
-      setHealthState("error");
-      setMessage("NEXT_PUBLIC_API_BASE_URL is not configured.");
-      return;
-    }
-
-    setHealthState("checking");
-    setMessage("Checking backend health...");
+  async function refreshProjects() {
+    setIsLoading(true);
+    setMessage(null);
 
     try {
-      const response = await fetch(`${apiBaseUrl}/health`, {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error(`Backend returned HTTP ${response.status}.`);
-      }
-
-      const data = (await response.json()) as HealthResponse;
-
-      if (data.status !== "ok") {
-        throw new Error("Backend health response did not report status ok.");
-      }
-
-      setHealthState("ok");
-      setMessage(`status ok from ${data.service}`);
+      setProjects(await listProjects());
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Unknown error.";
-      setHealthState("error");
-      setMessage(`Backend unavailable: ${detail}`);
+      setMessage(`Unable to load projects: ${detail}`);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshProjects();
+  }, []);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSubmitting(true);
+    setMessage(null);
+
+    try {
+      await createProject({
+        customer_name: optionalValue(form.customer_name),
+        module_name: optionalValue(form.module_name),
+        name: optionalValue(form.name),
+        email_id: optionalValue(form.email_id),
+      });
+
+      setForm(emptyForm);
+      await refreshProjects();
+      setMessage("Project created.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setMessage(`Unable to create project: ${detail}`);
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
   return (
-    <main className="page-shell">
+    <main className="page-shell workspace-page">
       <section className="workspace-panel" aria-labelledby="app-title">
-        <div className="intro">
+        <header className="intro">
           <h1 id="app-title">AUD Generator</h1>
           <p className="subtitle">Internal Oracle AUD generation workspace</p>
-        </div>
+        </header>
 
-        <div className="health-card" aria-live="polite">
-          <div>
-            <h2>Backend health status</h2>
-            <p className={`status-message status-${healthState}`}>{message}</p>
+        <section className="panel" aria-labelledby="create-project-title">
+          <div className="section-heading">
+            <h2 id="create-project-title">Create Project</h2>
           </div>
 
-          <button
-            type="button"
-            className="health-button"
-            onClick={checkBackendHealth}
-            disabled={healthState === "checking"}
-          >
-            {healthState === "checking" ? "Checking..." : "Check Backend Health"}
-          </button>
-        </div>
+          <form className="project-form" onSubmit={handleSubmit}>
+            <label>
+              <span>Customer Name</span>
+              <input
+                value={form.customer_name}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    customer_name: event.target.value,
+                  }))
+                }
+              />
+            </label>
+
+            <label>
+              <span>Module Name</span>
+              <input
+                value={form.module_name}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    module_name: event.target.value,
+                  }))
+                }
+              />
+            </label>
+
+            <label>
+              <span>Author Name</span>
+              <input
+                value={form.name}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
+              />
+            </label>
+
+            <label>
+              <span>Email Id</span>
+              <input
+                type="email"
+                value={form.email_id}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    email_id: event.target.value,
+                  }))
+                }
+              />
+            </label>
+
+            <div className="form-actions">
+              <button type="submit" className="primary-button" disabled={isSubmitting}>
+                {isSubmitting ? "Creating..." : "Create Project"}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        {message ? <p className="status-message">{message}</p> : null}
+
+        <section className="project-list-section" aria-labelledby="project-list-title">
+          <div className="section-heading">
+            <h2 id="project-list-title">Projects</h2>
+            <button type="button" className="secondary-button" onClick={refreshProjects}>
+              Refresh
+            </button>
+          </div>
+
+          {isLoading ? <p className="muted-text">Loading projects...</p> : null}
+
+          {!isLoading && projects.length === 0 ? (
+            <p className="muted-text">No projects yet.</p>
+          ) : null}
+
+          <div className="project-list">
+            {projects.map((project) => (
+              <Link
+                key={project.id}
+                href={`/projects/${project.id}`}
+                className="project-row"
+              >
+                <div>
+                  <h3>{project.customer_name || "Unnamed customer"}</h3>
+                  <p>{project.module_name || "No module selected"}</p>
+                </div>
+
+                <dl className="project-meta">
+                  <div>
+                    <dt>Status</dt>
+                    <dd>{project.status}</dd>
+                  </div>
+                  <div>
+                    <dt>Author Name</dt>
+                    <dd>{project.name || "Not available"}</dd>
+                  </div>
+                  <div>
+                    <dt>Created</dt>
+                    <dd>{formatProjectDate(project.created_at)}</dd>
+                  </div>
+                </dl>
+              </Link>
+            ))}
+          </div>
+        </section>
       </section>
     </main>
   );

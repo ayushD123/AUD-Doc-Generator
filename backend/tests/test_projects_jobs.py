@@ -14,7 +14,8 @@ from app.models import Job, Project, UploadedFile
 
 @pytest.fixture()
 def client(tmp_path: Path) -> Generator[TestClient, None, None]:
-    database_url = f"sqlite:///{tmp_path / 'test.db'}"
+    database_path = tmp_path / "test.db"
+    database_url = f"sqlite:///{database_path.as_posix()}"
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
     testing_session_local = sessionmaker(
         bind=engine,
@@ -79,6 +80,13 @@ def test_list_projects(client: TestClient) -> None:
     assert len(response.json()) == 2
 
 
+def test_get_project_returns_404_for_unknown_project(client: TestClient) -> None:
+    response = client.get("/projects/missing-project")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
 def test_create_and_list_project_jobs(client: TestClient) -> None:
     project_response = client.post(
         "/projects",
@@ -110,6 +118,13 @@ def test_create_and_list_project_jobs(client: TestClient) -> None:
     assert list_response.status_code == 200
     assert len(list_response.json()) == 1
     assert list_response.json()[0]["id"] == created_job["id"]
+
+
+def test_list_jobs_returns_404_for_unknown_project(client: TestClient) -> None:
+    response = client.get("/projects/missing-project/jobs")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
 
 
 def test_create_job_returns_404_for_unknown_project(client: TestClient) -> None:

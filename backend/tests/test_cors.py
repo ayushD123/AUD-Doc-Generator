@@ -1,9 +1,10 @@
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import create_app
 
 
 def test_health_allows_frontend_dev_origin() -> None:
+    app = create_app(create_tables_on_startup=False)
     client = TestClient(app)
 
     response = client.options(
