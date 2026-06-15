@@ -212,14 +212,16 @@ h3 {
 
 .project-list,
 .file-list,
-.job-list {
+.job-list,
+.extracted-content-list {
   display: grid;
   gap: 12px;
 }
 
 .project-row,
 .file-row,
-.job-row {
+.job-row,
+.extracted-content-row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
   gap: 20px;
@@ -236,7 +238,8 @@ h3 {
 
 .project-row p,
 .file-row p,
-.job-row p {
+.job-row p,
+.extracted-content-row p {
   margin-top: 4px;
   color: var(--muted);
   line-height: 1.5;
@@ -246,19 +249,55 @@ h3 {
 .project-meta,
 .metadata-grid,
 .file-meta,
-.job-meta {
+.job-meta,
+.extracted-content-meta {
   display: grid;
   gap: 14px;
 }
 
 .project-meta,
 .file-meta,
-.job-meta {
+.job-meta,
+.extracted-content-meta {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .job-meta {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.extracted-content-row {
+  grid-template-columns: 1fr;
+}
+
+.extracted-content-meta {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.content-preview {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.content-preview summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.content-preview pre {
+  max-height: 220px;
+  margin: 12px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  background: #f7f8fa;
+  color: var(--text);
+  font: 0.9rem/1.5 "Courier New", monospace;
 }
 
 .metadata-grid {
@@ -319,9 +358,11 @@ dd {
   .project-row,
   .file-row,
   .job-row,
+  .extracted-content-row,
   .project-meta,
   .file-meta,
   .job-meta,
+  .extracted-content-meta,
   .metadata-grid,
   .placeholder-grid {
     grid-template-columns: 1fr;

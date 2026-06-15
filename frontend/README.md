@@ -2,7 +2,7 @@
 
 Next.js TypeScript frontend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, and local file upload UI that calls the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing, complex styling, or a component library.
+This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, local file upload UI, job controls, and extracted content review that calls the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing in the frontend, complex styling, editing extracted content, or AUD generation.
 
 ## Prerequisites
 
@@ -81,6 +81,12 @@ Manual checks:
 - Confirm the jobs list refreshes with a pending `classify_files` job.
 - In a backend terminal, run `python -m app.workers.local_worker`.
 - Click Refresh Jobs and confirm the job status/progress updates.
+- Confirm the Extracted Content card appears on the project detail page.
+- Click Refresh Extracted Content.
+- Expected result before extraction: the card shows `No extracted content yet.`
+- After backend DOCX or transcript extraction has run, expected result: the card lists extracted records with title, content type, created date, source role when present, golden source status, and available counts.
+- Open Preview on an extracted record.
+- Expected result: extracted text appears only inside the collapsed Preview area and stays within a scrollable max-height region.
 - Confirm the detail page still shows placeholder sections for AUD Plan and Generated Documents.
 
 The frontend calls:
@@ -93,4 +99,5 @@ POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/classify-files
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/extracted-content
 ```

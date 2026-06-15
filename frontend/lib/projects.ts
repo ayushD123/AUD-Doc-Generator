@@ -48,6 +48,17 @@ export type Job = {
   updated_at: string | null;
 };
 
+export type ExtractedContent = {
+  id: string;
+  project_id: string;
+  uploaded_file_id: string;
+  content_type: string;
+  title: string | null;
+  text_content: string | null;
+  json_content: string | null;
+  created_at: string | null;
+};
+
 export const sourceRoles: SourceRole[] = [
   "template_aud",
   "final_aud_sample",
@@ -120,6 +131,10 @@ export function listProjectFiles(projectId: string) {
 
 export function listProjectJobs(projectId: string) {
   return requestJson<Job[]>(`/projects/${projectId}/jobs`);
+}
+
+export function listExtractedContent(projectId: string) {
+  return requestJson<ExtractedContent[]>(`/projects/${projectId}/extracted-content`);
 }
 
 export function createClassifyFilesJob(projectId: string) {
