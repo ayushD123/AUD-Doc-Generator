@@ -6,18 +6,20 @@ import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import {
   formatProjectDate,
+  createClassifyFilesJob,
   getProject,
+  listProjectJobs,
   listProjectFiles,
   sourceRoleLabels,
   sourceRoles,
   uploadProjectFile,
+  type Job,
   type Project,
   type SourceRole,
   type UploadedFile,
 } from "@/lib/projects";
 
 const placeholderSections = [
-  "Jobs",
   "AUD Plan",
   "Generated Documents",
 ];
@@ -26,14 +28,18 @@ export default function ProjectDetailPage() {
   const params = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
   const [sourceRole, setSourceRole] = useState<SourceRole>("unknown");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
+  const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [isCreatingJob, setIsCreatingJob] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
+  const [jobMessage, setJobMessage] = useState<string | null>(null);
 
   async function refreshFiles(projectId: string) {
     setIsLoadingFiles(true);
@@ -46,6 +52,20 @@ export default function ProjectDetailPage() {
       setFileMessage(`Unable to load uploaded files: ${detail}`);
     } finally {
       setIsLoadingFiles(false);
+    }
+  }
+
+  async function refreshJobs(projectId: string) {
+    setIsLoadingJobs(true);
+    setJobMessage(null);
+
+    try {
+      setJobs(await listProjectJobs(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setJobMessage(`Unable to load jobs: ${detail}`);
+    } finally {
+      setIsLoadingJobs(false);
     }
   }
 
@@ -66,6 +86,7 @@ export default function ProjectDetailPage() {
 
     void loadProject();
     void refreshFiles(params.projectId);
+    void refreshJobs(params.projectId);
   }, [params.projectId]);
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
@@ -95,6 +116,22 @@ export default function ProjectDetailPage() {
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     setSelectedFile(event.target.files?.[0] || null);
+  }
+
+  async function handleCreateClassifyJob() {
+    setIsCreatingJob(true);
+    setJobMessage(null);
+
+    try {
+      await createClassifyFilesJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setJobMessage("Classify Files job created.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setJobMessage(`Unable to create job: ${detail}`);
+    } finally {
+      setIsCreatingJob(false);
+    }
   }
 
   return (
@@ -212,6 +249,74 @@ export default function ProjectDetailPage() {
                       <div>
                         <dt>Created</dt>
                         <dd>{formatProjectDate(uploadedFile.created_at)}</dd>
+                      </div>
+                    </dl>
+                  </article>
+                ))}
+              </div>
+            </section>
+
+            <section className="panel" aria-labelledby="jobs-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="jobs-title">Jobs</h2>
+                  <p className="muted-text">
+                    Run the local backend worker manually to process pending jobs.
+                  </p>
+                </div>
+
+                <div className="button-group">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={handleCreateClassifyJob}
+                    disabled={isCreatingJob}
+                  >
+                    {isCreatingJob ? "Creating..." : "Classify Files"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => refreshJobs(params.projectId)}
+                    disabled={isLoadingJobs}
+                  >
+                    Refresh Jobs
+                  </button>
+                </div>
+              </div>
+
+              {jobMessage ? <p className="status-message">{jobMessage}</p> : null}
+
+              {isLoadingJobs ? <p className="muted-text">Loading jobs...</p> : null}
+
+              {!isLoadingJobs && jobs.length === 0 ? (
+                <p className="muted-text">No jobs yet.</p>
+              ) : null}
+
+              <div className="job-list">
+                {jobs.map((job) => (
+                  <article key={job.id} className="job-row">
+                    <div>
+                      <h3>{job.job_type}</h3>
+                      <p>{job.message || "No message"}</p>
+                    </div>
+
+                    <dl className="job-meta">
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{job.status}</dd>
+                      </div>
+                      <div>
+                        <dt>Progress</dt>
+                        <dd>{job.progress}%</dd>
+                      </div>
+                      <div>
+                        <dt>Created</dt>
+                        <dd>{formatProjectDate(job.created_at)}</dd>
+                      </div>
+                      <div>
+                        <dt>Updated</dt>
+                        <dd>{formatProjectDate(job.updated_at)}</dd>
                       </div>
                     </dl>
                   </article>

@@ -37,6 +37,17 @@ export type UploadedFile = {
   created_at: string | null;
 };
 
+export type Job = {
+  id: string;
+  project_id: string;
+  job_type: string;
+  status: string;
+  progress: number;
+  message: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 export const sourceRoles: SourceRole[] = [
   "template_aud",
   "final_aud_sample",
@@ -105,6 +116,16 @@ export function createProject(payload: ProjectCreatePayload) {
 
 export function listProjectFiles(projectId: string) {
   return requestJson<UploadedFile[]>(`/projects/${projectId}/files`);
+}
+
+export function listProjectJobs(projectId: string) {
+  return requestJson<Job[]>(`/projects/${projectId}/jobs`);
+}
+
+export function createClassifyFilesJob(projectId: string) {
+  return requestJson<Job>(`/projects/${projectId}/jobs/classify-files`, {
+    method: "POST",
+  });
 }
 
 export async function uploadProjectFile(

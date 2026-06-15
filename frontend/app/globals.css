@@ -151,6 +151,13 @@ h3 {
   justify-content: flex-end;
 }
 
+.button-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
 .primary-button,
 .secondary-button {
   min-height: 42px;
@@ -204,13 +211,15 @@ h3 {
 }
 
 .project-list,
-.file-list {
+.file-list,
+.job-list {
   display: grid;
   gap: 12px;
 }
 
 .project-row,
-.file-row {
+.file-row,
+.job-row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
   gap: 20px;
@@ -226,7 +235,8 @@ h3 {
 }
 
 .project-row p,
-.file-row p {
+.file-row p,
+.job-row p {
   margin-top: 4px;
   color: var(--muted);
   line-height: 1.5;
@@ -235,14 +245,20 @@ h3 {
 
 .project-meta,
 .metadata-grid,
-.file-meta {
+.file-meta,
+.job-meta {
   display: grid;
   gap: 14px;
 }
 
 .project-meta,
-.file-meta {
+.file-meta,
+.job-meta {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.job-meta {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .metadata-grid {
@@ -302,8 +318,10 @@ dd {
   .upload-form,
   .project-row,
   .file-row,
+  .job-row,
   .project-meta,
   .file-meta,
+  .job-meta,
   .metadata-grid,
   .placeholder-grid {
     grid-template-columns: 1fr;
@@ -320,6 +338,10 @@ dd {
 
   .primary-button,
   .secondary-button {
+    width: 100%;
+  }
+
+  .button-group {
     width: 100%;
   }
 }

@@ -77,7 +77,11 @@ Manual checks:
 - In Uploaded Files, select a source role such as KT Session (MP4) and choose an allowed file type.
 - Click Upload File.
 - Confirm the uploaded file list refreshes and shows filename, source role, file type, and created date.
-- Confirm the detail page still shows placeholder sections for Jobs, AUD Plan, and Generated Documents.
+- In Jobs, click Classify Files.
+- Confirm the jobs list refreshes with a pending `classify_files` job.
+- In a backend terminal, run `python -m app.workers.local_worker`.
+- Click Refresh Jobs and confirm the job status/progress updates.
+- Confirm the detail page still shows placeholder sections for AUD Plan and Generated Documents.
 
 The frontend calls:
 
@@ -87,4 +91,6 @@ GET  {NEXT_PUBLIC_API_BASE_URL}/projects
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
+POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/classify-files
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs
 ```

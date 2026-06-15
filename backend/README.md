@@ -115,6 +115,7 @@ GET  /projects
 GET  /projects/{project_id}
 POST /projects/{project_id}/files
 GET  /projects/{project_id}/files
+POST /projects/{project_id}/jobs/classify-files
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
 ```
@@ -153,6 +154,51 @@ Allowed `source_role` values:
 
 ```text
 template_aud, final_aud_sample, fdd, kt_ppt, kt_session, kt_transcript, config_workbook, supporting_doc, unknown
+```
+
+## Local Async Jobs
+
+Jobs are stored in the local database. No Redis, Celery, or OCI Queue is used yet.
+
+Create a file classification job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/classify-files"
+```
+
+The job starts as:
+
+```json
+{
+  "job_type": "classify_files",
+  "status": "pending",
+  "progress": 0
+}
+```
+
+Run the local worker manually from the `backend/` directory:
+
+```powershell
+python -m app.workers.local_worker
+```
+
+The worker picks pending `classify_files` jobs, marks them `running`, simulates work, assigns uploaded file types from extensions, and marks jobs `completed`.
+
+Check job status:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/jobs"
+```
+
+Current simulated classification mapping:
+
+```text
+.docx       -> docx
+.pptx       -> pptx
+.xlsx/.xlsm -> spreadsheet
+.txt        -> transcript_text
+.m4a/.mp4   -> media
+.pdf        -> pdf
 ```
 
 ## Run Tests
