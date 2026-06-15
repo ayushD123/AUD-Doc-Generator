@@ -167,6 +167,66 @@ def process_extract_docx_job(
     session.commit()
 
 
+def should_extract_pptx(uploaded_file: UploadedFile) -> bool:
+    extension = Path(uploaded_file.original_filename).suffix.lower()
+    return uploaded_file.file_type == "pptx" or extension == ".pptx"
+
+
+def process_extract_pptx_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+    storage_root: Path | None = None,
+) -> None:
+    job.status = "running"
+    job.progress = 10
+    job.message = "Extracting PPTX content."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    resolved_storage_root = storage_root or get_local_storage_root()
+    uploaded_files = session.scalars(
+        select(UploadedFile).where(UploadedFile.project_id == job.project_id)
+    ).all()
+    pptx_files = [
+        uploaded_file
+        for uploaded_file in uploaded_files
+        if should_extract_pptx(uploaded_file)
+    ]
+
+    for uploaded_file in pptx_files:
+        from app.services.pptx_extraction import extract_pptx
+
+        image_storage_prefix = (
+            f"projects/{job.project_id}/extracted_images/{uploaded_file.id}"
+        )
+        extracted_pptx = extract_pptx(
+            file_path=resolved_storage_root / uploaded_file.storage_path,
+            image_output_dir=resolved_storage_root / image_storage_prefix,
+            image_storage_prefix=image_storage_prefix,
+        )
+        json_content = extracted_pptx["json_content"]
+        json_content["source_role"] = uploaded_file.source_role
+
+        extracted_content = ExtractedContent(
+            project_id=job.project_id,
+            uploaded_file_id=uploaded_file.id,
+            content_type="pptx",
+            title=uploaded_file.original_filename,
+            text_content=extracted_pptx["text_content"],
+            json_content=json.dumps(json_content),
+        )
+        session.add(extracted_content)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Extracted {len(pptx_files)} PPTX file(s)."
+    session.commit()
+
+
 def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
     create_db_and_tables()
     processed_count = 0
@@ -177,7 +237,12 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
             .where(
                 Job.status == "pending",
                 Job.job_type.in_(
-                    ["classify_files", "extract_transcripts", "extract_docx"]
+                    [
+                        "classify_files",
+                        "extract_transcripts",
+                        "extract_docx",
+                        "extract_pptx",
+                    ]
                 ),
             )
             .order_by(Job.created_at.asc())
@@ -190,6 +255,8 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                 process_extract_transcripts_job(session, job, sleep_seconds=sleep_seconds)
             elif job.job_type == "extract_docx":
                 process_extract_docx_job(session, job, sleep_seconds=sleep_seconds)
+            elif job.job_type == "extract_pptx":
+                process_extract_pptx_job(session, job, sleep_seconds=sleep_seconds)
             processed_count += 1
 
     return processed_count

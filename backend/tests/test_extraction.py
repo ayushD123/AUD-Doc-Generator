@@ -1,4 +1,5 @@
 import json
+from base64 import b64decode
 from collections.abc import Generator
 from io import BytesIO
 from pathlib import Path
@@ -15,6 +16,7 @@ from app.models import Job
 from app.services.file_storage import LocalFileStorageService, get_file_storage
 from app.workers.local_worker import (
     process_extract_docx_job,
+    process_extract_pptx_job,
     process_extract_transcripts_job,
 )
 
@@ -208,3 +210,134 @@ def test_extract_docx_from_uploaded_fdd(
             "rows": [["Field", "Value"], ["Source", "FDD"]],
         }
     ]
+
+
+def create_pptx_fixture(tmp_path: Path) -> bytes:
+    pptx = pytest.importorskip("pptx")
+    pptx_util = pytest.importorskip("pptx.util")
+
+    presentation = pptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[5])
+    slide.shapes.title.text = "Fulfillment Flow"
+
+    text_box = slide.shapes.add_textbox(
+        pptx_util.Inches(1),
+        pptx_util.Inches(1.4),
+        pptx_util.Inches(6),
+        pptx_util.Inches(0.8),
+    )
+    text_box.text_frame.text = "Reserve inventory and release shipment."
+
+    table = slide.shapes.add_table(
+        2,
+        2,
+        pptx_util.Inches(1),
+        pptx_util.Inches(2.4),
+        pptx_util.Inches(5),
+        pptx_util.Inches(1),
+    ).table
+    table.cell(0, 0).text = "Step"
+    table.cell(0, 1).text = "Owner"
+    table.cell(1, 0).text = "Ship Confirm"
+    table.cell(1, 1).text = "Warehouse"
+
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(
+        b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+            "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+    )
+    slide.shapes.add_picture(
+        str(image_path),
+        pptx_util.Inches(6.4),
+        pptx_util.Inches(1.3),
+        width=pptx_util.Inches(1),
+        height=pptx_util.Inches(1),
+    )
+
+    buffer = BytesIO()
+    presentation.save(buffer)
+    return buffer.getvalue()
+
+
+def test_extract_pptx_from_uploaded_kt_ppt(
+    client_and_session: tuple[TestClient, sessionmaker],
+    tmp_path: Path,
+) -> None:
+    client, session_local = client_and_session
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Order Management",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "kt_ppt"},
+        files={
+            "file": (
+                "order-flow.pptx",
+                create_pptx_fixture(tmp_path),
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            )
+        },
+    )
+    assert upload_response.status_code == 201
+    uploaded_file_id = upload_response.json()["id"]
+
+    job_response = client.post(f"/projects/{project_id}/jobs/extract-pptx")
+    assert job_response.status_code == 201
+    job_id = job_response.json()["id"]
+
+    with session_local() as session:
+        job = session.scalar(select(Job).where(Job.id == job_id))
+        assert job is not None
+        process_extract_pptx_job(
+            session,
+            job,
+            sleep_seconds=0,
+            storage_root=client.storage_root,
+        )
+
+    extracted_response = client.get(f"/projects/{project_id}/extracted-content")
+
+    assert extracted_response.status_code == 200
+    extracted_contents = extracted_response.json()
+    assert len(extracted_contents) == 1
+    extracted_content = extracted_contents[0]
+    assert extracted_content["project_id"] == project_id
+    assert extracted_content["uploaded_file_id"] == uploaded_file_id
+    assert extracted_content["content_type"] == "pptx"
+    assert extracted_content["title"] == "order-flow.pptx"
+    assert "Slide 1" in extracted_content["text_content"]
+    assert "Title: Fulfillment Flow" in extracted_content["text_content"]
+    assert "Reserve inventory and release shipment." in extracted_content["text_content"]
+    assert "Ship Confirm | Warehouse" in extracted_content["text_content"]
+    assert "Images: 1" in extracted_content["text_content"]
+
+    json_content = json.loads(extracted_content["json_content"])
+    assert json_content["source_role"] == "kt_ppt"
+    assert json_content["slide_count"] == 1
+    assert json_content["table_count"] == 1
+    assert json_content["total_image_count"] == 1
+    assert len(json_content["image_paths"]) == 1
+    assert json_content["slides"][0]["title"] == "Fulfillment Flow"
+    assert json_content["slides"][0]["texts"] == [
+        "Fulfillment Flow",
+        "Reserve inventory and release shipment.",
+    ]
+    assert json_content["slides"][0]["tables"] == [
+        {
+            "index": 1,
+            "rows": [["Step", "Owner"], ["Ship Confirm", "Warehouse"]],
+        }
+    ]
+    assert json_content["slides"][0]["image_count"] == 1
+
+    saved_image_path = client.storage_root / json_content["image_paths"][0]
+    assert saved_image_path.exists()
+    assert saved_image_path.parent.name == uploaded_file_id
