@@ -116,8 +116,10 @@ GET  /projects/{project_id}
 POST /projects/{project_id}/files
 GET  /projects/{project_id}/files
 POST /projects/{project_id}/jobs/classify-files
+POST /projects/{project_id}/jobs/extract-transcripts
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
+GET  /projects/{project_id}/extracted-content
 ```
 
 ## File Upload Examples
@@ -166,11 +168,17 @@ Create a file classification job:
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/classify-files"
 ```
 
-The job starts as:
+Create a plain text transcript extraction job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-transcripts"
+```
+
+Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files",
+  "job_type": "classify_files | extract_transcripts",
   "status": "pending",
   "progress": 0
 }
@@ -182,7 +190,10 @@ Run the local worker manually from the `backend/` directory:
 python -m app.workers.local_worker
 ```
 
-The worker picks pending `classify_files` jobs, marks them `running`, simulates work, assigns uploaded file types from extensions, and marks jobs `completed`.
+The worker picks pending local jobs and simulates processing:
+
+- `classify_files`: assigns uploaded file types from extensions.
+- `extract_transcripts`: reads `.txt` uploads only and stores extracted transcript text.
 
 Check job status:
 
@@ -199,6 +210,27 @@ Current simulated classification mapping:
 .txt        -> transcript_text
 .m4a/.mp4   -> media
 .pdf        -> pdf
+```
+
+Current transcript extraction scope:
+
+- Only `.txt` files are read.
+- DOCX, PPTX, XLSX, PDF, media transcription, LLM calls, and AUD generation are not included yet.
+- Files are selected when `file_type` is `transcript_text` or the original filename ends in `.txt`.
+
+Check extracted content:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/extracted-content"
+```
+
+Extracted transcript records include:
+
+```text
+content_type = transcript
+title = original filename
+text_content = full text
+json_content = character_count and word_count
 ```
 
 ## Run Tests

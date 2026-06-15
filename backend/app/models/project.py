@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, new_uuid, utc_now
 
 if TYPE_CHECKING:
+    from app.models.extracted_content import ExtractedContent
     from app.models.job import Job
     from app.models.uploaded_file import UploadedFile
 
@@ -39,6 +40,10 @@ class Project(Base):
         cascade="all, delete-orphan",
     )
     jobs: Mapped[list["Job"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    extracted_contents: Mapped[list["ExtractedContent"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )

@@ -60,6 +60,34 @@ def create_classify_files_job(
     return job
 
 
+@router.post(
+    "/extract-transcripts",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_extract_transcripts_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> Job:
+    project = db.get(Project, project_id)
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        )
+
+    job = Job(
+        project_id=project.id,
+        job_type="extract_transcripts",
+        message="Transcript extraction job queued.",
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 @router.get("", response_model=list[JobRead])
 def list_jobs(
     project_id: str,
