@@ -152,7 +152,7 @@ Allowed file extensions:
 Allowed `source_role` values:
 
 ```text
-template_aud, final_aud_sample, fdd, kt_ppt, kt_transcript, config_workbook, supporting_doc, unknown
+template_aud, final_aud_sample, fdd, kt_ppt, kt_session, kt_transcript, config_workbook, supporting_doc, unknown
 ```
 
 ## Run Tests

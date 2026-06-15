@@ -16,6 +16,51 @@ export type ProjectCreatePayload = {
   module_name?: string | null;
 };
 
+export type SourceRole =
+  | "template_aud"
+  | "final_aud_sample"
+  | "fdd"
+  | "kt_ppt"
+  | "kt_session"
+  | "kt_transcript"
+  | "config_workbook"
+  | "supporting_doc"
+  | "unknown";
+
+export type UploadedFile = {
+  id: string;
+  project_id: string;
+  original_filename: string;
+  file_type: string | null;
+  storage_path: string;
+  source_role: SourceRole | null;
+  created_at: string | null;
+};
+
+export const sourceRoles: SourceRole[] = [
+  "template_aud",
+  "final_aud_sample",
+  "fdd",
+  "kt_ppt",
+  "kt_session",
+  "kt_transcript",
+  "config_workbook",
+  "supporting_doc",
+  "unknown",
+];
+
+export const sourceRoleLabels: Record<SourceRole, string> = {
+  template_aud: "Template AUD",
+  final_aud_sample: "Final AUD Sample",
+  fdd: "FDD - Functional Design Document",
+  kt_ppt: "KT Presentation (PPTX)",
+  kt_session: "KT Session (MP4)",
+  kt_transcript: "KT Transcript",
+  config_workbook: "Configuration Workbook",
+  supporting_doc: "Supporting Document",
+  unknown: "Other Files",
+};
+
 function getApiBaseUrl() {
   const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
@@ -56,6 +101,32 @@ export function createProject(payload: ProjectCreatePayload) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function listProjectFiles(projectId: string) {
+  return requestJson<UploadedFile[]>(`/projects/${projectId}/files`);
+}
+
+export async function uploadProjectFile(
+  projectId: string,
+  sourceRole: SourceRole,
+  file: File,
+) {
+  const formData = new FormData();
+  formData.append("source_role", sourceRole);
+  formData.append("file", file);
+
+  const response = await fetch(`${getApiBaseUrl()}/projects/${projectId}/files`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const errorBody = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new Error(errorBody?.detail || `Request failed with HTTP ${response.status}.`);
+  }
+
+  return (await response.json()) as UploadedFile;
 }
 
 export function formatProjectDate(value: string | null) {

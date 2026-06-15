@@ -21,6 +21,7 @@ ALLOWED_SOURCE_ROLES = {
     "final_aud_sample",
     "fdd",
     "kt_ppt",
+    "kt_session",
     "kt_transcript",
     "config_workbook",
     "supporting_doc",

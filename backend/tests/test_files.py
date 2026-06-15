@@ -88,6 +88,22 @@ def test_upload_accepted_file(client: TestClient) -> None:
     assert saved_file.read_bytes() == b"fake docx content"
 
 
+def test_upload_accepts_kt_session_mp4(client: TestClient) -> None:
+    project_id = create_project(client)
+
+    response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "kt_session"},
+        files={"file": ("session.mp4", b"fake mp4 content", "video/mp4")},
+    )
+
+    assert response.status_code == 201
+    uploaded_file = response.json()
+    assert uploaded_file["original_filename"] == "session.mp4"
+    assert uploaded_file["file_type"] == "mp4"
+    assert uploaded_file["source_role"] == "kt_session"
+
+
 def test_upload_rejects_unsupported_file(client: TestClient) -> None:
     project_id = create_project(client)
 

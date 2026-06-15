@@ -2,7 +2,7 @@
 
 Next.js TypeScript frontend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal App Router setup, project creation, project listing, and a project detail workspace that calls the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, upload functionality, complex styling, or a component library.
+This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, and local file upload UI that calls the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing, complex styling, or a component library.
 
 ## Prerequisites
 
@@ -74,7 +74,10 @@ Manual checks:
 - Confirm the project appears in the project list.
 - Click the project row.
 - Confirm `/projects/{projectId}` opens and shows project metadata.
-- Confirm the detail page shows placeholder sections for Uploaded Files, Jobs, AUD Plan, and Generated Documents.
+- In Uploaded Files, select a source role such as KT Session (MP4) and choose an allowed file type.
+- Click Upload File.
+- Confirm the uploaded file list refreshes and shows filename, source role, file type, and created date.
+- Confirm the detail page still shows placeholder sections for Jobs, AUD Plan, and Generated Documents.
 
 The frontend calls:
 
@@ -82,4 +85,6 @@ The frontend calls:
 POST {NEXT_PUBLIC_API_BASE_URL}/projects
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}
+POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
 ```
