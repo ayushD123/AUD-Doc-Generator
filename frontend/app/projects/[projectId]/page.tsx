@@ -8,22 +8,27 @@ import {
   formatProjectDate,
   createClassifyFilesJob,
   createExtractAllJob,
+  createGenerateAudPlanJob,
+  getAudPlan,
   getProject,
+  getSourcePriorityReport,
   listExtractedContent,
   listProjectJobs,
   listProjectFiles,
   sourceRoleLabels,
   sourceRoles,
   uploadProjectFile,
+  type AUDPlan,
+  type AUDPlanJson,
   type ExtractedContent,
   type Job,
   type Project,
   type SourceRole,
+  type SourcePriorityReport,
   type UploadedFile,
 } from "@/lib/projects";
 
 const placeholderSections = [
-  "AUD Plan",
   "Generated Documents",
 ];
 
@@ -60,6 +65,24 @@ function parseExtractedContentJson(value: string | null): ExtractedContentJson {
   return {};
 }
 
+function parseAudPlanJson(value: string | null): AUDPlanJson {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as AUDPlanJson;
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
+}
+
 function formatSourceRole(value: string | null | undefined) {
   if (!value) {
     return "Not available";
@@ -70,6 +93,18 @@ function formatSourceRole(value: string | null | undefined) {
   }
 
   return value;
+}
+
+function formatPrioritySource(value: string) {
+  if (value === "default_scm_template") {
+    return "Default SCM Template";
+  }
+
+  if (value === "aud_template") {
+    return "AUD Template";
+  }
+
+  return formatSourceRole(value);
 }
 
 function buildCountSummary(jsonContent: ExtractedContentJson) {
@@ -96,6 +131,9 @@ export default function ProjectDetailPage() {
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [extractedContents, setExtractedContents] = useState<ExtractedContent[]>([]);
+  const [audPlan, setAudPlan] = useState<AUDPlan | null>(null);
+  const [sourcePriorityReport, setSourcePriorityReport] =
+    useState<SourcePriorityReport | null>(null);
   const [sourceRole, setSourceRole] = useState<SourceRole>("unknown");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -103,13 +141,22 @@ export default function ProjectDetailPage() {
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [isLoadingExtractedContent, setIsLoadingExtractedContent] = useState(true);
+  const [isLoadingAudPlan, setIsLoadingAudPlan] = useState(true);
+  const [isLoadingSourcePriority, setIsLoadingSourcePriority] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
   const [isCreatingExtractAllJob, setIsCreatingExtractAllJob] = useState(false);
+  const [isCreatingAudPlanJob, setIsCreatingAudPlanJob] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
-  const [extractedContentMessage, setExtractedContentMessage] = useState<string | null>(null);
+  const [extractedContentMessage, setExtractedContentMessage] = useState<string | null>(
+    null,
+  );
+  const [audPlanMessage, setAudPlanMessage] = useState<string | null>(null);
+  const [sourcePriorityMessage, setSourcePriorityMessage] = useState<string | null>(
+    null,
+  );
 
   async function refreshFiles(projectId: string) {
     setIsLoadingFiles(true);
@@ -153,6 +200,34 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function refreshAudPlan(projectId: string) {
+    setIsLoadingAudPlan(true);
+    setAudPlanMessage(null);
+
+    try {
+      setAudPlan(await getAudPlan(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setAudPlanMessage(`Unable to load AUD plan: ${detail}`);
+    } finally {
+      setIsLoadingAudPlan(false);
+    }
+  }
+
+  async function refreshSourcePriority(projectId: string) {
+    setIsLoadingSourcePriority(true);
+    setSourcePriorityMessage(null);
+
+    try {
+      setSourcePriorityReport(await getSourcePriorityReport(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setSourcePriorityMessage(`Unable to load source priority: ${detail}`);
+    } finally {
+      setIsLoadingSourcePriority(false);
+    }
+  }
+
   useEffect(() => {
     async function loadProject() {
       setIsLoading(true);
@@ -172,6 +247,8 @@ export default function ProjectDetailPage() {
     void refreshFiles(params.projectId);
     void refreshJobs(params.projectId);
     void refreshExtractedContent(params.projectId);
+    void refreshAudPlan(params.projectId);
+    void refreshSourcePriority(params.projectId);
   }, [params.projectId]);
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
@@ -190,6 +267,7 @@ export default function ProjectDetailPage() {
       setSelectedFile(null);
       setFileInputKey((current) => current + 1);
       await refreshFiles(params.projectId);
+      void refreshSourcePriority(params.projectId);
       setFileMessage("File uploaded.");
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Unknown error.";
@@ -234,6 +312,25 @@ export default function ProjectDetailPage() {
       setIsCreatingExtractAllJob(false);
     }
   }
+
+  async function handleCreateAudPlanJob() {
+    setIsCreatingAudPlanJob(true);
+    setJobMessage(null);
+
+    try {
+      await createGenerateAudPlanJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setJobMessage("Generate AUD Plan job created.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setJobMessage(`Unable to create job: ${detail}`);
+    } finally {
+      setIsCreatingAudPlanJob(false);
+    }
+  }
+
+  const audPlanJson = parseAudPlanJson(audPlan?.plan_json ?? null);
+  const plannedSections = audPlanJson.sections ?? [];
 
   return (
     <main className="page-shell workspace-page">
@@ -378,6 +475,14 @@ export default function ProjectDetailPage() {
                   <button
                     type="button"
                     className="secondary-button"
+                    onClick={handleCreateAudPlanJob}
+                    disabled={isCreatingAudPlanJob}
+                  >
+                    {isCreatingAudPlanJob ? "Creating..." : "Generate AUD Plan"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
                     onClick={handleCreateClassifyJob}
                     disabled={isCreatingJob}
                   >
@@ -431,6 +536,200 @@ export default function ProjectDetailPage() {
                   </article>
                 ))}
               </div>
+            </section>
+
+            <section className="panel" aria-labelledby="aud-plan-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="aud-plan-title">AUD Plan</h2>
+                  <p className="muted-text">
+                    Review the planned AUD sections before document generation begins.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => refreshAudPlan(params.projectId)}
+                  disabled={isLoadingAudPlan}
+                >
+                  Refresh AUD Plan
+                </button>
+              </div>
+
+              {audPlanMessage ? <p className="status-message">{audPlanMessage}</p> : null}
+
+              {isLoadingAudPlan ? <p className="muted-text">Loading AUD plan...</p> : null}
+
+              {!isLoadingAudPlan && !audPlan ? (
+                <p className="muted-text">No AUD plan generated yet.</p>
+              ) : null}
+
+              {!isLoadingAudPlan && audPlan ? (
+                <div className="aud-plan-content">
+                  <dl className="aud-plan-meta">
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{audPlan.status}</dd>
+                    </div>
+                    <div>
+                      <dt>Default Template Required</dt>
+                      <dd>
+                        {typeof audPlanJson.default_template_required === "boolean"
+                          ? audPlanJson.default_template_required
+                            ? "Yes"
+                            : "No"
+                          : "Not available"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Updated</dt>
+                      <dd>{formatProjectDate(audPlan.updated_at)}</dd>
+                    </div>
+                  </dl>
+
+                  {plannedSections.length === 0 ? (
+                    <p className="muted-text">No planned sections available.</p>
+                  ) : null}
+
+                  <div className="aud-plan-section-list">
+                    {plannedSections.map((section) => (
+                      <article key={section.section_id} className="aud-plan-section-row">
+                        <div>
+                          <h3>{section.title}</h3>
+                          <p>{section.section_id}</p>
+                        </div>
+
+                        <dl className="aud-plan-section-meta">
+                          <div>
+                            <dt>Confidence</dt>
+                            <dd>{section.confidence}</dd>
+                          </div>
+                          <div>
+                            <dt>Include in AUD</dt>
+                            <dd>{section.include_in_aud ? "Yes" : "No"}</dd>
+                          </div>
+                          <div>
+                            <dt>Source Role Basis</dt>
+                            <dd>{formatPrioritySource(section.source_role_basis)}</dd>
+                          </div>
+                        </dl>
+
+                        <div className="aud-plan-notes">
+                          <h4>Notes</h4>
+                          {section.notes.length > 0 ? (
+                            <ul>
+                              {section.notes.map((note) => (
+                                <li key={note}>{note}</li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="muted-text">No notes.</p>
+                          )}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="panel" aria-labelledby="source-priority-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="source-priority-title">Source Priority</h2>
+                  <p className="muted-text">
+                    Review source precedence rules before AUD generation begins.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => refreshSourcePriority(params.projectId)}
+                  disabled={isLoadingSourcePriority}
+                >
+                  Refresh Source Priority
+                </button>
+              </div>
+
+              {sourcePriorityMessage ? (
+                <p className="status-message">{sourcePriorityMessage}</p>
+              ) : null}
+
+              {isLoadingSourcePriority ? (
+                <p className="muted-text">Loading source priority...</p>
+              ) : null}
+
+              {!isLoadingSourcePriority && sourcePriorityReport ? (
+                <div className="source-priority-content">
+                  <dl className="source-priority-meta">
+                    <div>
+                      <dt>Explicit Template</dt>
+                      <dd>
+                        {sourcePriorityReport.has_explicit_template ? "Yes" : "No"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>FDD Golden Source</dt>
+                      <dd>
+                        {sourcePriorityReport.golden_source_files.length > 0
+                          ? "Yes"
+                          : "No"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Default SCM Template Needed</dt>
+                      <dd>
+                        {sourcePriorityReport.recommended_default_template_needed
+                          ? "Yes"
+                          : "No"}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <div className="source-priority-block">
+                    <h3>Source Roles Present</h3>
+                    <p>
+                      {sourcePriorityReport.source_roles_present.length > 0
+                        ? sourcePriorityReport.source_roles_present
+                            .map((role) => formatSourceRole(role))
+                            .join(", ")
+                        : "Not available"}
+                    </p>
+                  </div>
+
+                  <div className="source-priority-block">
+                    <h3>Priority Order</h3>
+                    {sourcePriorityReport.priority_order.length > 0 ? (
+                      <ol className="priority-list">
+                        {sourcePriorityReport.priority_order.map((item) => (
+                          <li key={`${item.priority}-${item.source}`}>
+                            <strong>{formatPrioritySource(item.source)}</strong>
+                            <span>{item.purpose}</span>
+                            <p>{item.rule}</p>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="muted-text">No priority order available.</p>
+                    )}
+                  </div>
+
+                  <div className="source-priority-block">
+                    <h3>Warnings</h3>
+                    {sourcePriorityReport.warnings.length > 0 ? (
+                      <ul className="warning-list">
+                        {sourcePriorityReport.warnings.map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="muted-text">No warnings.</p>
+                    )}
+                  </div>
+                </div>
+              ) : null}
             </section>
 
             <section className="panel" aria-labelledby="extracted-content-title">

@@ -541,6 +541,30 @@ def process_extract_all_job(
     session.commit()
 
 
+def process_generate_aud_plan_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.aud_plan_service import generate_aud_plan
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Generating AUD plan."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    aud_plan = generate_aud_plan(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Generated AUD plan {aud_plan.id}."
+    session.commit()
+
+
 def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
     create_db_and_tables()
     processed_count = 0
@@ -558,6 +582,7 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         "extract_pptx",
                         "extract_spreadsheets",
                         "extract_all",
+                        "generate_aud_plan",
                     ]
                 ),
             )
@@ -586,6 +611,12 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                     )
                 elif job.job_type == "extract_all":
                     process_extract_all_job(session, job, sleep_seconds=sleep_seconds)
+                elif job.job_type == "generate_aud_plan":
+                    process_generate_aud_plan_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
             except Exception as error:
                 session.rollback()
                 job.status = "failed"

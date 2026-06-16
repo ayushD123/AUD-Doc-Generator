@@ -79,18 +79,27 @@ Manual checks:
 - Confirm the uploaded file list refreshes and shows filename, source role, file type, and created date.
 - In Jobs, click Extract All Files.
 - Confirm the jobs list refreshes with a pending `extract_all` job.
+- In Jobs, click Generate AUD Plan.
+- Confirm the jobs list refreshes with a pending `generate_aud_plan` job.
 - In Jobs, click Classify Files.
 - Confirm the jobs list refreshes with a pending `classify_files` job.
 - In a backend terminal, run `python -m app.workers.local_worker`.
 - Click Refresh Jobs and confirm the job status/progress updates.
 - Expected result for Extract All Files: the job reaches `completed` at `100%`, or `completed_with_warnings` if some files extracted and some failed.
+- Confirm the AUD Plan card appears on the project detail page.
+- Click Refresh AUD Plan.
+- Expected result before plan generation: the card shows `No AUD plan generated yet.`
+- After backend AUD plan generation has run, expected result: the card shows whether the default template is required and lists planned sections in order with title, confidence, include flag, source role basis, and notes.
+- Confirm the Source Priority card appears on the project detail page.
+- Click Refresh Source Priority.
+- Expected result: the card shows explicit template status, FDD golden source status, source roles present, priority order, warnings, and whether the default SCM template will be needed later.
 - Confirm the Extracted Content card appears on the project detail page.
 - Click Refresh Extracted Content.
 - Expected result before extraction: the card shows `No extracted content yet.`
 - After backend DOCX or transcript extraction has run, expected result: the card lists extracted records with title, content type, created date, source role when present, golden source status, and available counts.
 - Open Preview on an extracted record.
 - Expected result: extracted text appears only inside the collapsed Preview area and stays within a scrollable max-height region.
-- Confirm the detail page still shows placeholder sections for AUD Plan and Generated Documents.
+- Confirm the detail page still shows the placeholder section for Generated Documents.
 
 The frontend calls:
 
@@ -102,6 +111,9 @@ POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/classify-files
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/extract-all
+POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/generate-aud-plan
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/extracted-content
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/source-priority-report
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/aud-plan
 ```

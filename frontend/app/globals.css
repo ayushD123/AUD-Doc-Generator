@@ -41,9 +41,12 @@ a {
 h1,
 h2,
 h3,
+h4,
 p,
 dl,
-dd {
+dd,
+ul,
+ol {
   margin: 0;
 }
 
@@ -213,6 +216,7 @@ h3 {
 .project-list,
 .file-list,
 .job-list,
+.aud-plan-section-list,
 .extracted-content-list {
   display: grid;
   gap: 12px;
@@ -221,6 +225,7 @@ h3 {
 .project-row,
 .file-row,
 .job-row,
+.aud-plan-section-row,
 .extracted-content-row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
@@ -239,6 +244,7 @@ h3 {
 .project-row p,
 .file-row p,
 .job-row p,
+.aud-plan-section-row p,
 .extracted-content-row p {
   margin-top: 4px;
   color: var(--muted);
@@ -250,6 +256,9 @@ h3 {
 .metadata-grid,
 .file-meta,
 .job-meta,
+.aud-plan-meta,
+.aud-plan-section-meta,
+.source-priority-meta,
 .extracted-content-meta {
   display: grid;
   gap: 14px;
@@ -258,6 +267,9 @@ h3 {
 .project-meta,
 .file-meta,
 .job-meta,
+.aud-plan-meta,
+.aud-plan-section-meta,
+.source-priority-meta,
 .extracted-content-meta {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -272,6 +284,81 @@ h3 {
 
 .extracted-content-meta {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.aud-plan-content {
+  display: grid;
+  gap: 18px;
+}
+
+.aud-plan-section-row {
+  grid-template-columns: 1fr;
+}
+
+.aud-plan-notes {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.aud-plan-notes h4 {
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.aud-plan-notes ul {
+  display: grid;
+  gap: 6px;
+  padding-left: 20px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.source-priority-content {
+  display: grid;
+  gap: 18px;
+}
+
+.source-priority-block {
+  display: grid;
+  gap: 8px;
+}
+
+.source-priority-block h3 {
+  font-size: 1rem;
+}
+
+.source-priority-block p {
+  color: var(--muted);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.priority-list,
+.warning-list {
+  display: grid;
+  gap: 10px;
+  padding-left: 20px;
+}
+
+.priority-list li {
+  line-height: 1.5;
+}
+
+.priority-list strong {
+  display: block;
+}
+
+.priority-list span {
+  display: block;
+  color: var(--text);
+}
+
+.priority-list p,
+.warning-list li {
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .content-preview {
@@ -358,10 +445,14 @@ dd {
   .project-row,
   .file-row,
   .job-row,
+  .aud-plan-section-row,
   .extracted-content-row,
   .project-meta,
   .file-meta,
   .job-meta,
+  .aud-plan-meta,
+  .aud-plan-section-meta,
+  .source-priority-meta,
   .extracted-content-meta,
   .metadata-grid,
   .placeholder-grid {

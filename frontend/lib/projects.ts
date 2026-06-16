@@ -59,6 +59,59 @@ export type ExtractedContent = {
   created_at: string | null;
 };
 
+export type SourceFileReference = {
+  uploaded_file_id: string;
+  original_filename: string;
+  source_role: string;
+  file_type: string | null;
+  extracted_content_ids: string[];
+};
+
+export type SourcePriorityItem = {
+  source: string;
+  priority: number;
+  purpose: string;
+  rule: string;
+};
+
+export type SourcePriorityReport = {
+  has_explicit_template: boolean;
+  golden_source_files: SourceFileReference[];
+  source_roles_present: string[];
+  priority_order: SourcePriorityItem[];
+  warnings: string[];
+  recommended_default_template_needed: boolean;
+  notes: string[];
+};
+
+export type AUDPlan = {
+  id: string;
+  project_id: string;
+  status: string;
+  plan_json: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type AUDPlanSection = {
+  section_id: string;
+  title: string;
+  source_file_ids: string[];
+  source_content_ids: string[];
+  source_role_basis: string;
+  confidence: string;
+  include_in_aud: boolean;
+  notes: string[];
+};
+
+export type AUDPlanJson = {
+  project_id?: string;
+  status?: string;
+  generation_basis?: string;
+  default_template_required?: boolean;
+  sections?: AUDPlanSection[];
+};
+
 export const sourceRoles: SourceRole[] = [
   "template_aud",
   "final_aud_sample",
@@ -137,6 +190,30 @@ export function listExtractedContent(projectId: string) {
   return requestJson<ExtractedContent[]>(`/projects/${projectId}/extracted-content`);
 }
 
+export function getSourcePriorityReport(projectId: string) {
+  return requestJson<SourcePriorityReport>(
+    `/projects/${projectId}/source-priority-report`,
+  );
+}
+
+export async function getAudPlan(projectId: string) {
+  const response = await fetch(`${getApiBaseUrl()}/projects/${projectId}/aud-plan`, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Request failed with HTTP ${response.status}.`);
+  }
+
+  return (await response.json()) as AUDPlan;
+}
+
 export function createClassifyFilesJob(projectId: string) {
   return requestJson<Job>(`/projects/${projectId}/jobs/classify-files`, {
     method: "POST",
@@ -145,6 +222,12 @@ export function createClassifyFilesJob(projectId: string) {
 
 export function createExtractAllJob(projectId: string) {
   return requestJson<Job>(`/projects/${projectId}/jobs/extract-all`, {
+    method: "POST",
+  });
+}
+
+export function createGenerateAudPlanJob(projectId: string) {
+  return requestJson<Job>(`/projects/${projectId}/jobs/generate-aud-plan`, {
     method: "POST",
   });
 }

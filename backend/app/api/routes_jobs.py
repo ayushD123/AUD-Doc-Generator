@@ -163,6 +163,23 @@ def create_extract_all_job(
     )
 
 
+@router.post(
+    "/generate-aud-plan",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_generate_aud_plan_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="generate_aud_plan",
+        message="AUD plan generation job queued.",
+        db=db,
+    )
+
+
 @router.get("", response_model=list[JobRead])
 def list_jobs(
     project_id: str,
