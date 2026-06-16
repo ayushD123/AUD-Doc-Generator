@@ -146,6 +146,23 @@ def create_extract_spreadsheets_job(
     )
 
 
+@router.post(
+    "/extract-all",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_extract_all_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="extract_all",
+        message="Extract all files job queued.",
+        db=db,
+    )
+
+
 @router.get("", response_model=list[JobRead])
 def list_jobs(
     project_id: str,

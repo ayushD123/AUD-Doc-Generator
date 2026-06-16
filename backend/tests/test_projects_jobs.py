@@ -270,6 +270,36 @@ def test_create_extract_spreadsheets_job_returns_404_for_unknown_project(
     assert response.json()["detail"] == "Project not found."
 
 
+def test_create_extract_all_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(f"/projects/{project_id}/jobs/extract-all")
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "extract_all"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "Extract all files job queued."
+
+
+def test_create_extract_all_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post("/projects/missing-project/jobs/extract-all")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
 def test_list_jobs_returns_404_for_unknown_project(client: TestClient) -> None:
     response = client.get("/projects/missing-project/jobs")
 

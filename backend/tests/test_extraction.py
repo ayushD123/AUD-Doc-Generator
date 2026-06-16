@@ -15,6 +15,7 @@ from app.main import create_app
 from app.models import Job
 from app.services.file_storage import LocalFileStorageService, get_file_storage
 from app.workers.local_worker import (
+    process_extract_all_job,
     process_extract_docx_job,
     process_extract_pptx_job,
     process_extract_spreadsheets_job,
@@ -487,3 +488,184 @@ def test_extract_spreadsheet_handles_sparse_rows(tmp_path: Path) -> None:
         "values": [None, None, None, "Only populated cell in row"],
     }
     assert "2:  |  |  | Only populated cell in row" in extracted["text_content"]
+
+
+def test_extract_all_processes_supported_file_types(
+    client_and_session: tuple[TestClient, sessionmaker],
+    tmp_path: Path,
+) -> None:
+    client, session_local = client_and_session
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Order Management",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    uploads = [
+        (
+            "kt-notes.txt",
+            b"Welcome to the KT session.",
+            "text/plain",
+            "kt_transcript",
+        ),
+        (
+            "order-management-fdd.docx",
+            create_docx_fixture(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "fdd",
+        ),
+        (
+            "order-flow.pptx",
+            create_pptx_fixture(tmp_path),
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "kt_ppt",
+        ),
+        (
+            "order-config.xlsx",
+            create_workbook_fixture(),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "config_workbook",
+        ),
+    ]
+
+    for filename, content, content_type, source_role in uploads:
+        upload_response = client.post(
+            f"/projects/{project_id}/files",
+            data={"source_role": source_role},
+            files={"file": (filename, content, content_type)},
+        )
+        assert upload_response.status_code == 201
+
+    job_response = client.post(f"/projects/{project_id}/jobs/extract-all")
+    assert job_response.status_code == 201
+    job_id = job_response.json()["id"]
+
+    with session_local() as session:
+        job = session.scalar(select(Job).where(Job.id == job_id))
+        assert job is not None
+        process_extract_all_job(
+            session,
+            job,
+            sleep_seconds=0,
+            storage_root=client.storage_root,
+            max_rows_per_sheet=3,
+        )
+        session.refresh(job)
+        assert job.status == "completed"
+        assert job.progress == 100
+        assert job.message == (
+            "Extracted 4 of 4 file(s) across all supported file types."
+        )
+
+    extracted_response = client.get(f"/projects/{project_id}/extracted-content")
+    extracted_contents = extracted_response.json()
+    assert sorted(content["content_type"] for content in extracted_contents) == [
+        "docx",
+        "pptx",
+        "spreadsheet",
+        "transcript",
+    ]
+
+
+def test_extract_all_completed_with_warnings_when_some_files_fail(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    client, session_local = client_and_session
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Order Management",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    valid_upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "kt_transcript"},
+        files={"file": ("kt-notes.txt", b"Valid transcript", "text/plain")},
+    )
+    assert valid_upload_response.status_code == 201
+
+    invalid_upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "supporting_doc"},
+        files={
+            "file": (
+                "broken.docx",
+                b"not a real docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert invalid_upload_response.status_code == 201
+
+    job_response = client.post(f"/projects/{project_id}/jobs/extract-all")
+    job_id = job_response.json()["id"]
+
+    with session_local() as session:
+        job = session.scalar(select(Job).where(Job.id == job_id))
+        assert job is not None
+        process_extract_all_job(
+            session,
+            job,
+            sleep_seconds=0,
+            storage_root=client.storage_root,
+        )
+        session.refresh(job)
+        assert job.status == "completed_with_warnings"
+        assert job.progress == 100
+        assert "Extracted 1 of 2 file(s)" in (job.message or "")
+        assert "broken.docx" in (job.message or "")
+
+    extracted_response = client.get(f"/projects/{project_id}/extracted-content")
+    extracted_contents = extracted_response.json()
+    assert len(extracted_contents) == 1
+    assert extracted_contents[0]["content_type"] == "transcript"
+
+
+def test_extract_all_failed_when_all_files_fail(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    client, session_local = client_and_session
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Order Management",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "supporting_doc"},
+        files={
+            "file": (
+                "broken.docx",
+                b"not a real docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+    assert upload_response.status_code == 201
+
+    job_response = client.post(f"/projects/{project_id}/jobs/extract-all")
+    job_id = job_response.json()["id"]
+
+    with session_local() as session:
+        job = session.scalar(select(Job).where(Job.id == job_id))
+        assert job is not None
+        process_extract_all_job(
+            session,
+            job,
+            sleep_seconds=0,
+            storage_root=client.storage_root,
+        )
+        session.refresh(job)
+        assert job.status == "failed"
+        assert job.progress == 100
+        assert "Extracted 0 of 1 file(s)" in (job.message or "")

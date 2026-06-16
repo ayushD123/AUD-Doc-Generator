@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import sleep
 from traceback import format_exception_only
@@ -23,8 +24,44 @@ FILE_TYPE_BY_EXTENSION = {
 }
 
 
+@dataclass
+class ExtractionResult:
+    attempted_count: int = 0
+    success_count: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def record_success(self) -> None:
+        self.attempted_count += 1
+        self.success_count += 1
+
+    def record_error(self, uploaded_file: UploadedFile, error: Exception) -> None:
+        self.attempted_count += 1
+        error_detail = "".join(format_exception_only(type(error), error)).strip()
+        self.errors.append(f"{uploaded_file.original_filename}: {error_detail}")
+
+
 def classify_file_type(filename: str) -> str | None:
     return FILE_TYPE_BY_EXTENSION.get(Path(filename).suffix.lower())
+
+
+def list_project_uploaded_files(session: Session, project_id: str) -> list[UploadedFile]:
+    return list(
+        session.scalars(
+            select(UploadedFile).where(UploadedFile.project_id == project_id)
+        ).all()
+    )
+
+
+def raise_or_record_extraction_error(
+    result: ExtractionResult,
+    uploaded_file: UploadedFile,
+    error: Exception,
+    continue_on_error: bool,
+) -> None:
+    if not continue_on_error:
+        raise error
+
+    result.record_error(uploaded_file, error)
 
 
 def process_classify_files_job(
@@ -64,6 +101,49 @@ def read_uploaded_text_file(storage_root: Path, uploaded_file: UploadedFile) -> 
     return file_path.read_text(encoding="utf-8", errors="replace")
 
 
+def extract_transcripts_for_project(
+    session: Session,
+    project_id: str,
+    uploaded_files: list[UploadedFile],
+    storage_root: Path,
+    continue_on_error: bool = False,
+) -> ExtractionResult:
+    result = ExtractionResult()
+    transcript_files = [
+        uploaded_file
+        for uploaded_file in uploaded_files
+        if should_extract_transcript(uploaded_file)
+    ]
+
+    for uploaded_file in transcript_files:
+        try:
+            text_content = read_uploaded_text_file(storage_root, uploaded_file)
+            extracted_content = ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=uploaded_file.id,
+                content_type="transcript",
+                title=uploaded_file.original_filename,
+                text_content=text_content,
+                json_content=json.dumps(
+                    {
+                        "character_count": len(text_content),
+                        "word_count": len(text_content.split()),
+                    }
+                ),
+            )
+            session.add(extracted_content)
+            result.record_success()
+        except Exception as error:
+            raise_or_record_extraction_error(
+                result,
+                uploaded_file,
+                error,
+                continue_on_error,
+            )
+
+    return result
+
+
 def process_extract_transcripts_job(
     session: Session,
     job: Job,
@@ -78,43 +158,71 @@ def process_extract_transcripts_job(
     sleep(sleep_seconds)
 
     resolved_storage_root = storage_root or get_local_storage_root()
-    uploaded_files = session.scalars(
-        select(UploadedFile).where(UploadedFile.project_id == job.project_id)
-    ).all()
-    transcript_files = [
-        uploaded_file
-        for uploaded_file in uploaded_files
-        if should_extract_transcript(uploaded_file)
-    ]
-
-    for uploaded_file in transcript_files:
-        text_content = read_uploaded_text_file(resolved_storage_root, uploaded_file)
-        extracted_content = ExtractedContent(
-            project_id=job.project_id,
-            uploaded_file_id=uploaded_file.id,
-            content_type="transcript",
-            title=uploaded_file.original_filename,
-            text_content=text_content,
-            json_content=json.dumps(
-                {
-                    "character_count": len(text_content),
-                    "word_count": len(text_content.split()),
-                }
-            ),
-        )
-        session.add(extracted_content)
+    result = extract_transcripts_for_project(
+        session=session,
+        project_id=job.project_id,
+        uploaded_files=list_project_uploaded_files(session, job.project_id),
+        storage_root=resolved_storage_root,
+    )
 
     sleep(sleep_seconds)
 
     job.status = "completed"
     job.progress = 100
-    job.message = f"Extracted {len(transcript_files)} transcript file(s)."
+    job.message = f"Extracted {result.success_count} transcript file(s)."
     session.commit()
 
 
 def should_extract_docx(uploaded_file: UploadedFile) -> bool:
     extension = Path(uploaded_file.original_filename).suffix.lower()
     return uploaded_file.file_type == "docx" or extension == ".docx"
+
+
+def extract_docx_for_project(
+    session: Session,
+    project_id: str,
+    uploaded_files: list[UploadedFile],
+    storage_root: Path,
+    continue_on_error: bool = False,
+) -> ExtractionResult:
+    result = ExtractionResult()
+    docx_files = [
+        uploaded_file
+        for uploaded_file in uploaded_files
+        if should_extract_docx(uploaded_file)
+    ]
+
+    for uploaded_file in docx_files:
+        try:
+            from app.services.docx_extraction import extract_docx
+
+            file_path = storage_root / uploaded_file.storage_path
+            extracted_docx = extract_docx(file_path)
+            json_content = extracted_docx["json_content"]
+            json_content["source_role"] = uploaded_file.source_role
+
+            if uploaded_file.source_role == "fdd":
+                json_content["is_golden_source"] = True
+
+            extracted_content = ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=uploaded_file.id,
+                content_type="docx",
+                title=uploaded_file.original_filename,
+                text_content=extracted_docx["text_content"],
+                json_content=json.dumps(json_content),
+            )
+            session.add(extracted_content)
+            result.record_success()
+        except Exception as error:
+            raise_or_record_extraction_error(
+                result,
+                uploaded_file,
+                error,
+                continue_on_error,
+            )
+
+    return result
 
 
 def process_extract_docx_job(
@@ -131,47 +239,74 @@ def process_extract_docx_job(
     sleep(sleep_seconds)
 
     resolved_storage_root = storage_root or get_local_storage_root()
-    uploaded_files = session.scalars(
-        select(UploadedFile).where(UploadedFile.project_id == job.project_id)
-    ).all()
-    docx_files = [
-        uploaded_file
-        for uploaded_file in uploaded_files
-        if should_extract_docx(uploaded_file)
-    ]
-
-    for uploaded_file in docx_files:
-        from app.services.docx_extraction import extract_docx
-
-        file_path = resolved_storage_root / uploaded_file.storage_path
-        extracted_docx = extract_docx(file_path)
-        json_content = extracted_docx["json_content"]
-        json_content["source_role"] = uploaded_file.source_role
-
-        if uploaded_file.source_role == "fdd":
-            json_content["is_golden_source"] = True
-
-        extracted_content = ExtractedContent(
-            project_id=job.project_id,
-            uploaded_file_id=uploaded_file.id,
-            content_type="docx",
-            title=uploaded_file.original_filename,
-            text_content=extracted_docx["text_content"],
-            json_content=json.dumps(json_content),
-        )
-        session.add(extracted_content)
+    result = extract_docx_for_project(
+        session=session,
+        project_id=job.project_id,
+        uploaded_files=list_project_uploaded_files(session, job.project_id),
+        storage_root=resolved_storage_root,
+    )
 
     sleep(sleep_seconds)
 
     job.status = "completed"
     job.progress = 100
-    job.message = f"Extracted {len(docx_files)} DOCX file(s)."
+    job.message = f"Extracted {result.success_count} DOCX file(s)."
     session.commit()
 
 
 def should_extract_pptx(uploaded_file: UploadedFile) -> bool:
     extension = Path(uploaded_file.original_filename).suffix.lower()
     return uploaded_file.file_type == "pptx" or extension == ".pptx"
+
+
+def extract_pptx_for_project(
+    session: Session,
+    project_id: str,
+    uploaded_files: list[UploadedFile],
+    storage_root: Path,
+    continue_on_error: bool = False,
+) -> ExtractionResult:
+    result = ExtractionResult()
+    pptx_files = [
+        uploaded_file
+        for uploaded_file in uploaded_files
+        if should_extract_pptx(uploaded_file)
+    ]
+
+    for uploaded_file in pptx_files:
+        try:
+            from app.services.pptx_extraction import extract_pptx
+
+            image_storage_prefix = (
+                f"projects/{project_id}/extracted_images/{uploaded_file.id}"
+            )
+            extracted_pptx = extract_pptx(
+                file_path=storage_root / uploaded_file.storage_path,
+                image_output_dir=storage_root / image_storage_prefix,
+                image_storage_prefix=image_storage_prefix,
+            )
+            json_content = extracted_pptx["json_content"]
+            json_content["source_role"] = uploaded_file.source_role
+
+            extracted_content = ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=uploaded_file.id,
+                content_type="pptx",
+                title=uploaded_file.original_filename,
+                text_content=extracted_pptx["text_content"],
+                json_content=json.dumps(json_content),
+            )
+            session.add(extracted_content)
+            result.record_success()
+        except Exception as error:
+            raise_or_record_extraction_error(
+                result,
+                uploaded_file,
+                error,
+                continue_on_error,
+            )
+
+    return result
 
 
 def process_extract_pptx_job(
@@ -188,50 +323,71 @@ def process_extract_pptx_job(
     sleep(sleep_seconds)
 
     resolved_storage_root = storage_root or get_local_storage_root()
-    uploaded_files = session.scalars(
-        select(UploadedFile).where(UploadedFile.project_id == job.project_id)
-    ).all()
-    pptx_files = [
-        uploaded_file
-        for uploaded_file in uploaded_files
-        if should_extract_pptx(uploaded_file)
-    ]
-
-    for uploaded_file in pptx_files:
-        from app.services.pptx_extraction import extract_pptx
-
-        image_storage_prefix = (
-            f"projects/{job.project_id}/extracted_images/{uploaded_file.id}"
-        )
-        extracted_pptx = extract_pptx(
-            file_path=resolved_storage_root / uploaded_file.storage_path,
-            image_output_dir=resolved_storage_root / image_storage_prefix,
-            image_storage_prefix=image_storage_prefix,
-        )
-        json_content = extracted_pptx["json_content"]
-        json_content["source_role"] = uploaded_file.source_role
-
-        extracted_content = ExtractedContent(
-            project_id=job.project_id,
-            uploaded_file_id=uploaded_file.id,
-            content_type="pptx",
-            title=uploaded_file.original_filename,
-            text_content=extracted_pptx["text_content"],
-            json_content=json.dumps(json_content),
-        )
-        session.add(extracted_content)
+    result = extract_pptx_for_project(
+        session=session,
+        project_id=job.project_id,
+        uploaded_files=list_project_uploaded_files(session, job.project_id),
+        storage_root=resolved_storage_root,
+    )
 
     sleep(sleep_seconds)
 
     job.status = "completed"
     job.progress = 100
-    job.message = f"Extracted {len(pptx_files)} PPTX file(s)."
+    job.message = f"Extracted {result.success_count} PPTX file(s)."
     session.commit()
 
 
 def should_extract_spreadsheet(uploaded_file: UploadedFile) -> bool:
     extension = Path(uploaded_file.original_filename).suffix.lower()
     return uploaded_file.file_type == "spreadsheet" or extension in {".xlsx", ".xlsm"}
+
+
+def extract_spreadsheets_for_project(
+    session: Session,
+    project_id: str,
+    uploaded_files: list[UploadedFile],
+    storage_root: Path,
+    max_rows_per_sheet: int,
+    continue_on_error: bool = False,
+) -> ExtractionResult:
+    result = ExtractionResult()
+    spreadsheet_files = [
+        uploaded_file
+        for uploaded_file in uploaded_files
+        if should_extract_spreadsheet(uploaded_file)
+    ]
+
+    for uploaded_file in spreadsheet_files:
+        try:
+            from app.services.spreadsheet_extraction import extract_spreadsheet
+
+            extracted_spreadsheet = extract_spreadsheet(
+                file_path=storage_root / uploaded_file.storage_path,
+                max_rows_per_sheet=max_rows_per_sheet,
+            )
+            json_content = extracted_spreadsheet["json_content"]
+            json_content["source_role"] = uploaded_file.source_role
+
+            extracted_content = ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=uploaded_file.id,
+                content_type="spreadsheet",
+                title=uploaded_file.original_filename,
+                text_content=extracted_spreadsheet["text_content"],
+                json_content=json.dumps(json_content),
+            )
+            session.add(extracted_content)
+            result.record_success()
+        except Exception as error:
+            raise_or_record_extraction_error(
+                result,
+                uploaded_file,
+                error,
+                continue_on_error,
+            )
+
+    return result
 
 
 def process_extract_spreadsheets_job(
@@ -252,40 +408,136 @@ def process_extract_spreadsheets_job(
     resolved_max_rows = (
         max_rows_per_sheet or get_settings().MAX_SPREADSHEET_ROWS_PER_SHEET
     )
-    uploaded_files = session.scalars(
-        select(UploadedFile).where(UploadedFile.project_id == job.project_id)
-    ).all()
-    spreadsheet_files = [
-        uploaded_file
-        for uploaded_file in uploaded_files
-        if should_extract_spreadsheet(uploaded_file)
-    ]
-
-    for uploaded_file in spreadsheet_files:
-        from app.services.spreadsheet_extraction import extract_spreadsheet
-
-        extracted_spreadsheet = extract_spreadsheet(
-            file_path=resolved_storage_root / uploaded_file.storage_path,
-            max_rows_per_sheet=resolved_max_rows,
-        )
-        json_content = extracted_spreadsheet["json_content"]
-        json_content["source_role"] = uploaded_file.source_role
-
-        extracted_content = ExtractedContent(
-            project_id=job.project_id,
-            uploaded_file_id=uploaded_file.id,
-            content_type="spreadsheet",
-            title=uploaded_file.original_filename,
-            text_content=extracted_spreadsheet["text_content"],
-            json_content=json.dumps(json_content),
-        )
-        session.add(extracted_content)
+    result = extract_spreadsheets_for_project(
+        session=session,
+        project_id=job.project_id,
+        uploaded_files=list_project_uploaded_files(session, job.project_id),
+        storage_root=resolved_storage_root,
+        max_rows_per_sheet=resolved_max_rows,
+    )
 
     sleep(sleep_seconds)
 
     job.status = "completed"
     job.progress = 100
-    job.message = f"Extracted {len(spreadsheet_files)} spreadsheet file(s)."
+    job.message = f"Extracted {result.success_count} spreadsheet file(s)."
+    session.commit()
+
+
+def merge_extraction_results(results: list[ExtractionResult]) -> ExtractionResult:
+    merged = ExtractionResult()
+
+    for result in results:
+        merged.attempted_count += result.attempted_count
+        merged.success_count += result.success_count
+        merged.errors.extend(result.errors)
+
+    return merged
+
+
+def build_extract_all_message(result: ExtractionResult) -> str:
+    if result.attempted_count == 0:
+        return "No extractable files found."
+
+    summary = (
+        f"Extracted {result.success_count} of {result.attempted_count} file(s) "
+        "across all supported file types."
+    )
+
+    if not result.errors:
+        return summary
+
+    return f"{summary} Warnings: " + "; ".join(result.errors)
+
+
+def process_extract_all_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+    storage_root: Path | None = None,
+    max_rows_per_sheet: int | None = None,
+) -> None:
+    job.status = "running"
+    job.progress = 5
+    job.message = "Starting extraction for all supported files."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_max_rows = (
+        max_rows_per_sheet or get_settings().MAX_SPREADSHEET_ROWS_PER_SHEET
+    )
+    uploaded_files = list_project_uploaded_files(session, job.project_id)
+    stage_results: list[ExtractionResult] = []
+
+    stages = [
+        (
+            "Extracting transcript text files.",
+            25,
+            lambda: extract_transcripts_for_project(
+                session=session,
+                project_id=job.project_id,
+                uploaded_files=uploaded_files,
+                storage_root=resolved_storage_root,
+                continue_on_error=True,
+            ),
+        ),
+        (
+            "Extracting DOCX files.",
+            50,
+            lambda: extract_docx_for_project(
+                session=session,
+                project_id=job.project_id,
+                uploaded_files=uploaded_files,
+                storage_root=resolved_storage_root,
+                continue_on_error=True,
+            ),
+        ),
+        (
+            "Extracting PPTX files.",
+            75,
+            lambda: extract_pptx_for_project(
+                session=session,
+                project_id=job.project_id,
+                uploaded_files=uploaded_files,
+                storage_root=resolved_storage_root,
+                continue_on_error=True,
+            ),
+        ),
+        (
+            "Extracting spreadsheet files.",
+            95,
+            lambda: extract_spreadsheets_for_project(
+                session=session,
+                project_id=job.project_id,
+                uploaded_files=uploaded_files,
+                storage_root=resolved_storage_root,
+                max_rows_per_sheet=resolved_max_rows,
+                continue_on_error=True,
+            ),
+        ),
+    ]
+
+    for stage_message, stage_progress, run_stage in stages:
+        job.message = stage_message
+        session.commit()
+        stage_results.append(run_stage())
+        job.progress = stage_progress
+        session.commit()
+        sleep(sleep_seconds)
+
+    result = merge_extraction_results(stage_results)
+    job.progress = 100
+    job.message = build_extract_all_message(result)
+
+    if result.errors and result.success_count > 0:
+        job.status = "completed_with_warnings"
+    elif result.errors and result.success_count == 0:
+        job.status = "failed"
+    else:
+        job.status = "completed"
+
     session.commit()
 
 
@@ -305,6 +557,7 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         "extract_docx",
                         "extract_pptx",
                         "extract_spreadsheets",
+                        "extract_all",
                     ]
                 ),
             )
@@ -331,6 +584,8 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         job,
                         sleep_seconds=sleep_seconds,
                     )
+                elif job.job_type == "extract_all":
+                    process_extract_all_job(session, job, sleep_seconds=sleep_seconds)
             except Exception as error:
                 session.rollback()
                 job.status = "failed"

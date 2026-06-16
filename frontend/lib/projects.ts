@@ -143,6 +143,12 @@ export function createClassifyFilesJob(projectId: string) {
   });
 }
 
+export function createExtractAllJob(projectId: string) {
+  return requestJson<Job>(`/projects/${projectId}/jobs/extract-all`, {
+    method: "POST",
+  });
+}
+
 export async function uploadProjectFile(
   projectId: string,
   sourceRole: SourceRole,

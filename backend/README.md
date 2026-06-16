@@ -135,6 +135,7 @@ POST /projects/{project_id}/jobs/extract-transcripts
 POST /projects/{project_id}/jobs/extract-docx
 POST /projects/{project_id}/jobs/extract-pptx
 POST /projects/{project_id}/jobs/extract-spreadsheets
+POST /projects/{project_id}/jobs/extract-all
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
 GET  /projects/{project_id}/extracted-content
@@ -210,11 +211,17 @@ Create a spreadsheet extraction job:
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-spreadsheets"
 ```
 
+Create one job to extract all supported uploaded files:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-all"
+```
+
 Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts | extract_docx | extract_pptx | extract_spreadsheets",
+  "job_type": "classify_files | extract_transcripts | extract_docx | extract_pptx | extract_spreadsheets | extract_all",
   "status": "pending",
   "progress": 0
 }
@@ -233,6 +240,9 @@ The worker picks pending local jobs and simulates processing:
 - `extract_docx`: reads `.docx` uploads and stores extracted paragraphs, heading-like paragraphs, tables, comments when present, and basic metadata.
 - `extract_pptx`: reads `.pptx` uploads, stores slide text/tables/notes metadata, and writes extracted images to local project storage.
 - `extract_spreadsheets`: reads `.xlsx` and `.xlsm` uploads and stores visible sheet structure, selected meaningful rows, formulas, and basic workbook metadata.
+- `extract_all`: runs transcript, DOCX, PPTX, and spreadsheet extraction in one job.
+
+`extract_all` progress moves across extraction stages. If some files fail and at least one file succeeds, the job ends as `completed_with_warnings`. If all attempted files fail, the job ends as `failed`.
 
 Check job status:
 
@@ -423,6 +433,28 @@ Expected results:
 - `json_content.sheets` includes visible sheets only.
 - Formulas appear as formula strings and are not evaluated.
 - Extracted rows stop at the configured `MAX_SPREADSHEET_ROWS_PER_SHEET` cap.
+
+## Manual Extract All Test
+
+Upload any mix of supported extraction files, then run:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-all"
+
+python -m app.workers.local_worker
+
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/jobs"
+
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/extracted-content"
+```
+
+Expected results:
+
+- The `extract_all` job reaches `100` progress.
+- If all files extract successfully, status is `completed`.
+- If at least one file extracts and another fails, status is `completed_with_warnings` and the message lists failed filenames.
+- If every attempted file fails, status is `failed`.
+- Extracted content rows are created for each successful supported file.
 
 ## Run Tests
 

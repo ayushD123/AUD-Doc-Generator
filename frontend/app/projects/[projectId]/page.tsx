@@ -7,6 +7,7 @@ import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import {
   formatProjectDate,
   createClassifyFilesJob,
+  createExtractAllJob,
   getProject,
   listExtractedContent,
   listProjectJobs,
@@ -104,6 +105,7 @@ export default function ProjectDetailPage() {
   const [isLoadingExtractedContent, setIsLoadingExtractedContent] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
+  const [isCreatingExtractAllJob, setIsCreatingExtractAllJob] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
@@ -214,6 +216,22 @@ export default function ProjectDetailPage() {
       setJobMessage(`Unable to create job: ${detail}`);
     } finally {
       setIsCreatingJob(false);
+    }
+  }
+
+  async function handleCreateExtractAllJob() {
+    setIsCreatingExtractAllJob(true);
+    setJobMessage(null);
+
+    try {
+      await createExtractAllJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setJobMessage("Extract All Files job created.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setJobMessage(`Unable to create job: ${detail}`);
+    } finally {
+      setIsCreatingExtractAllJob(false);
     }
   }
 
@@ -352,6 +370,14 @@ export default function ProjectDetailPage() {
                   <button
                     type="button"
                     className="primary-button"
+                    onClick={handleCreateExtractAllJob}
+                    disabled={isCreatingExtractAllJob}
+                  >
+                    {isCreatingExtractAllJob ? "Creating..." : "Extract All Files"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
                     onClick={handleCreateClassifyJob}
                     disabled={isCreatingJob}
                   >
