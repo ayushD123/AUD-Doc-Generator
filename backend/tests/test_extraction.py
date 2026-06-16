@@ -17,6 +17,7 @@ from app.services.file_storage import LocalFileStorageService, get_file_storage
 from app.workers.local_worker import (
     process_extract_docx_job,
     process_extract_pptx_job,
+    process_extract_spreadsheets_job,
     process_extract_transcripts_job,
 )
 
@@ -341,3 +342,148 @@ def test_extract_pptx_from_uploaded_kt_ppt(
     saved_image_path = client.storage_root / json_content["image_paths"][0]
     assert saved_image_path.exists()
     assert saved_image_path.parent.name == uploaded_file_id
+
+
+def create_workbook_fixture() -> bytes:
+    openpyxl = pytest.importorskip("openpyxl")
+
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Configuration Values"
+    worksheet.append(["Parameter", "Value", "Formula"])
+    worksheet.append(["Enable ATP", "Yes", "=LEN(B2)"])
+    worksheet.append(["Lead Time", 5, "=B3*2"])
+
+    notes_sheet = workbook.create_sheet("Notes")
+    notes_sheet.append(["Topic", "Detail"])
+    notes_sheet.append(["Shipping", "Validate against FDD"])
+
+    hidden_sheet = workbook.create_sheet("Hidden Setup")
+    hidden_sheet.sheet_state = "hidden"
+    hidden_sheet.append(["Should", "Not Extract"])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
+def test_extract_spreadsheets_from_uploaded_xlsx_and_xlsm(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    client, session_local = client_and_session
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Order Management",
+        },
+    )
+    project_id = project_response.json()["id"]
+    workbook_content = create_workbook_fixture()
+
+    xlsx_upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "config_workbook"},
+        files={
+            "file": (
+                "order-config.xlsx",
+                workbook_content,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+    assert xlsx_upload_response.status_code == 201
+
+    xlsm_upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "config_workbook"},
+        files={
+            "file": (
+                "order-config-macro.xlsm",
+                workbook_content,
+                "application/vnd.ms-excel.sheet.macroEnabled.12",
+            )
+        },
+    )
+    assert xlsm_upload_response.status_code == 201
+
+    job_response = client.post(f"/projects/{project_id}/jobs/extract-spreadsheets")
+    assert job_response.status_code == 201
+    job_id = job_response.json()["id"]
+
+    with session_local() as session:
+        job = session.scalar(select(Job).where(Job.id == job_id))
+        assert job is not None
+        process_extract_spreadsheets_job(
+            session,
+            job,
+            sleep_seconds=0,
+            storage_root=client.storage_root,
+            max_rows_per_sheet=3,
+        )
+
+    extracted_response = client.get(f"/projects/{project_id}/extracted-content")
+
+    assert extracted_response.status_code == 200
+    extracted_contents = extracted_response.json()
+    assert len(extracted_contents) == 2
+
+    extracted_by_title = {
+        extracted_content["title"]: extracted_content
+        for extracted_content in extracted_contents
+    }
+    assert set(extracted_by_title) == {"order-config.xlsx", "order-config-macro.xlsm"}
+
+    extracted_content = extracted_by_title["order-config.xlsx"]
+    assert extracted_content["content_type"] == "spreadsheet"
+    assert "Sheet: Configuration Values" in extracted_content["text_content"]
+    assert "1: Parameter | Value | Formula" in extracted_content["text_content"]
+    assert "2: Enable ATP | Yes | =LEN(B2)" in extracted_content["text_content"]
+    assert "3: Lead Time | 5 | =B3*2" in extracted_content["text_content"]
+    assert "Hidden Setup" not in extracted_content["text_content"]
+
+    json_content = json.loads(extracted_content["json_content"])
+    assert json_content["source_role"] == "config_workbook"
+    assert json_content["workbook"] == {
+        "sheet_count": 3,
+        "sheet_names": ["Configuration Values", "Notes", "Hidden Setup"],
+    }
+    assert [sheet["name"] for sheet in json_content["sheets"]] == [
+        "Configuration Values",
+        "Notes",
+    ]
+
+    config_sheet = json_content["sheets"][0]
+    assert config_sheet["max_row"] == 3
+    assert config_sheet["max_column"] == 3
+    assert config_sheet["non_empty_row_count"] == 3
+    assert config_sheet["detected_header_rows"] == [1]
+    assert config_sheet["is_likely_config_sheet"] is True
+    assert config_sheet["rows"] == [
+        {"row_number": 1, "values": ["Parameter", "Value", "Formula"]},
+        {"row_number": 2, "values": ["Enable ATP", "Yes", "=LEN(B2)"]},
+        {"row_number": 3, "values": ["Lead Time", 5, "=B3*2"]},
+    ]
+
+
+def test_extract_spreadsheet_handles_sparse_rows(tmp_path: Path) -> None:
+    openpyxl = pytest.importorskip("openpyxl")
+    from app.services.spreadsheet_extraction import extract_spreadsheet
+
+    workbook = openpyxl.Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Sparse Config"
+    worksheet.append(["A", "B", "C", "D"])
+    worksheet["D2"] = "Only populated cell in row"
+
+    workbook_path = tmp_path / "sparse.xlsx"
+    workbook.save(workbook_path)
+
+    extracted = extract_spreadsheet(workbook_path, max_rows_per_sheet=10)
+    sheet = extracted["json_content"]["sheets"][0]
+
+    assert sheet["rows"][1] == {
+        "row_number": 2,
+        "values": [None, None, None, "Only populated cell in row"],
+    }
+    assert "2:  |  |  | Only populated cell in row" in extracted["text_content"]

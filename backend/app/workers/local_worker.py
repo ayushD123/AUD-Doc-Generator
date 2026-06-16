@@ -1,10 +1,12 @@
 import json
 from pathlib import Path
 from time import sleep
+from traceback import format_exception_only
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import SessionLocal, create_db_and_tables
 from app.models import ExtractedContent, Job, UploadedFile
 from app.services.file_storage import get_local_storage_root
@@ -227,6 +229,66 @@ def process_extract_pptx_job(
     session.commit()
 
 
+def should_extract_spreadsheet(uploaded_file: UploadedFile) -> bool:
+    extension = Path(uploaded_file.original_filename).suffix.lower()
+    return uploaded_file.file_type == "spreadsheet" or extension in {".xlsx", ".xlsm"}
+
+
+def process_extract_spreadsheets_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+    storage_root: Path | None = None,
+    max_rows_per_sheet: int | None = None,
+) -> None:
+    job.status = "running"
+    job.progress = 10
+    job.message = "Extracting spreadsheet content."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_max_rows = (
+        max_rows_per_sheet or get_settings().MAX_SPREADSHEET_ROWS_PER_SHEET
+    )
+    uploaded_files = session.scalars(
+        select(UploadedFile).where(UploadedFile.project_id == job.project_id)
+    ).all()
+    spreadsheet_files = [
+        uploaded_file
+        for uploaded_file in uploaded_files
+        if should_extract_spreadsheet(uploaded_file)
+    ]
+
+    for uploaded_file in spreadsheet_files:
+        from app.services.spreadsheet_extraction import extract_spreadsheet
+
+        extracted_spreadsheet = extract_spreadsheet(
+            file_path=resolved_storage_root / uploaded_file.storage_path,
+            max_rows_per_sheet=resolved_max_rows,
+        )
+        json_content = extracted_spreadsheet["json_content"]
+        json_content["source_role"] = uploaded_file.source_role
+
+        extracted_content = ExtractedContent(
+            project_id=job.project_id,
+            uploaded_file_id=uploaded_file.id,
+            content_type="spreadsheet",
+            title=uploaded_file.original_filename,
+            text_content=extracted_spreadsheet["text_content"],
+            json_content=json.dumps(json_content),
+        )
+        session.add(extracted_content)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Extracted {len(spreadsheet_files)} spreadsheet file(s)."
+    session.commit()
+
+
 def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
     create_db_and_tables()
     processed_count = 0
@@ -235,13 +297,14 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
         pending_jobs = session.scalars(
             select(Job)
             .where(
-                Job.status == "pending",
+                Job.status.in_(["pending", "running"]),
                 Job.job_type.in_(
                     [
                         "classify_files",
                         "extract_transcripts",
                         "extract_docx",
                         "extract_pptx",
+                        "extract_spreadsheets",
                     ]
                 ),
             )
@@ -249,14 +312,30 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
         ).all()
 
         for job in pending_jobs:
-            if job.job_type == "classify_files":
-                process_classify_files_job(session, job, sleep_seconds=sleep_seconds)
-            elif job.job_type == "extract_transcripts":
-                process_extract_transcripts_job(session, job, sleep_seconds=sleep_seconds)
-            elif job.job_type == "extract_docx":
-                process_extract_docx_job(session, job, sleep_seconds=sleep_seconds)
-            elif job.job_type == "extract_pptx":
-                process_extract_pptx_job(session, job, sleep_seconds=sleep_seconds)
+            try:
+                if job.job_type == "classify_files":
+                    process_classify_files_job(session, job, sleep_seconds=sleep_seconds)
+                elif job.job_type == "extract_transcripts":
+                    process_extract_transcripts_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "extract_docx":
+                    process_extract_docx_job(session, job, sleep_seconds=sleep_seconds)
+                elif job.job_type == "extract_pptx":
+                    process_extract_pptx_job(session, job, sleep_seconds=sleep_seconds)
+                elif job.job_type == "extract_spreadsheets":
+                    process_extract_spreadsheets_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+            except Exception as error:
+                session.rollback()
+                job.status = "failed"
+                job.message = "".join(format_exception_only(type(error), error)).strip()
+                session.commit()
             processed_count += 1
 
     return processed_count

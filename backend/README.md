@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, transcript extraction, DOCX extraction, PPTX extraction, and pytest coverage. It does not include OCI integration, authentication, LLM calls, AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, and pytest coverage. It does not include OCI integration, authentication, LLM calls, AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -106,6 +106,21 @@ $env:LOCAL_STORAGE_ROOT = "storage"
 uvicorn app.main:app --reload
 ```
 
+Spreadsheet extraction reads only the first configured number of meaningful rows per visible sheet.
+
+Default row cap:
+
+```text
+MAX_SPREADSHEET_ROWS_PER_SHEET=200
+```
+
+To override it:
+
+```powershell
+$env:MAX_SPREADSHEET_ROWS_PER_SHEET = "100"
+uvicorn app.main:app --reload
+```
+
 ## Current API Endpoints
 
 ```text
@@ -119,6 +134,7 @@ POST /projects/{project_id}/jobs/classify-files
 POST /projects/{project_id}/jobs/extract-transcripts
 POST /projects/{project_id}/jobs/extract-docx
 POST /projects/{project_id}/jobs/extract-pptx
+POST /projects/{project_id}/jobs/extract-spreadsheets
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
 GET  /projects/{project_id}/extracted-content
@@ -188,11 +204,17 @@ Create a PPTX extraction job:
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-pptx"
 ```
 
+Create a spreadsheet extraction job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-spreadsheets"
+```
+
 Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts | extract_docx | extract_pptx",
+  "job_type": "classify_files | extract_transcripts | extract_docx | extract_pptx | extract_spreadsheets",
   "status": "pending",
   "progress": 0
 }
@@ -210,6 +232,7 @@ The worker picks pending local jobs and simulates processing:
 - `extract_transcripts`: reads `.txt` uploads only and stores extracted transcript text.
 - `extract_docx`: reads `.docx` uploads and stores extracted paragraphs, heading-like paragraphs, tables, comments when present, and basic metadata.
 - `extract_pptx`: reads `.pptx` uploads, stores slide text/tables/notes metadata, and writes extracted images to local project storage.
+- `extract_spreadsheets`: reads `.xlsx` and `.xlsm` uploads and stores visible sheet structure, selected meaningful rows, formulas, and basic workbook metadata.
 
 Check job status:
 
@@ -231,7 +254,7 @@ Current simulated classification mapping:
 Current transcript extraction scope:
 
 - Only `.txt` files are read.
-- XLSX, PDF, media transcription, LLM calls, and AUD generation are not included yet.
+- PDF, media transcription, LLM calls, and AUD generation are not included yet.
 - Files are selected when `file_type` is `transcript_text` or the original filename ends in `.txt`.
 
 Current DOCX extraction scope:
@@ -254,6 +277,17 @@ backend/storage/projects/{project_id}/extracted_images/{uploaded_file_id}/
 ```
 
 - No OCR is performed.
+- This phase does not generate an AUD and does not call an LLM.
+
+Current spreadsheet extraction scope:
+
+- Files are selected when `file_type` is `spreadsheet` or the original filename ends in `.xlsx` or `.xlsm`.
+- Workbook metadata includes sheet count and sheet names.
+- Only visible sheets are extracted.
+- Used ranges are extracted rather than huge blank areas.
+- Formulas are preserved as formula strings such as `=B3*2`; formulas are not evaluated.
+- Extracted rows are capped by `MAX_SPREADSHEET_ROWS_PER_SHEET`, default `200`.
+- Likely configuration sheets are detected from sheet names and non-empty content.
 - This phase does not generate an AUD and does not call an LLM.
 
 Check extracted content:
@@ -287,6 +321,15 @@ content_type = pptx
 title = original filename
 text_content = readable slide-by-slide text
 json_content = slide_count, slides, image_paths, table_count, total_image_count, and source_role
+```
+
+Extracted spreadsheet records include:
+
+```text
+content_type = spreadsheet
+title = original filename
+text_content = readable workbook and sheet summaries with selected rows
+json_content = workbook metadata, visible sheets, extracted rows, and source_role
 ```
 
 ## Manual DOCX Extraction Test
@@ -347,6 +390,39 @@ Expected results:
 - `json_content.slides` includes slide numbers, titles, text, tables, notes when available, and per-slide image counts.
 - `json_content.image_paths` lists extracted image storage paths.
 - Extracted image files exist under `backend/storage/projects/{project_id}/extracted_images/{uploaded_file_id}/`.
+
+## Manual Spreadsheet Extraction Test
+
+Start the API and upload a configuration workbook:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects" `
+  -H "Content-Type: application/json" `
+  -d "{\"customer_name\":\"Vision Operations\",\"module_name\":\"Order Management\"}"
+```
+
+Copy the returned `id`, then run:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/files" `
+  -F "source_role=config_workbook" `
+  -F "file=@C:\path\to\configuration.xlsx"
+
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-spreadsheets"
+
+python -m app.workers.local_worker
+
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/extracted-content"
+```
+
+Expected results:
+
+- The extracted row has `content_type` set to `spreadsheet`.
+- `text_content` shows readable sheet summaries and selected rows.
+- `json_content.workbook.sheet_count` and `json_content.workbook.sheet_names` describe the workbook.
+- `json_content.sheets` includes visible sheets only.
+- Formulas appear as formula strings and are not evaluated.
+- Extracted rows stop at the configured `MAX_SPREADSHEET_ROWS_PER_SHEET` cap.
 
 ## Run Tests
 

@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "local"
     DATABASE_URL: str = "sqlite:///./aud_generator.db"
     LOCAL_STORAGE_ROOT: str = "storage"
+    MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
