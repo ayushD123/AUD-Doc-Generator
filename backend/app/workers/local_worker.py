@@ -565,6 +565,30 @@ def process_generate_aud_plan_job(
     session.commit()
 
 
+def process_extract_open_points_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.open_points_service import extract_open_points
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Extracting open points."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    open_points = extract_open_points(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Extracted {len(open_points)} open point(s)."
+    session.commit()
+
+
 def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
     create_db_and_tables()
     processed_count = 0
@@ -583,6 +607,7 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         "extract_spreadsheets",
                         "extract_all",
                         "generate_aud_plan",
+                        "extract_open_points",
                     ]
                 ),
             )
@@ -613,6 +638,12 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                     process_extract_all_job(session, job, sleep_seconds=sleep_seconds)
                 elif job.job_type == "generate_aud_plan":
                     process_generate_aud_plan_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "extract_open_points":
+                    process_extract_open_points_job(
                         session,
                         job,
                         sleep_seconds=sleep_seconds,

@@ -7,12 +7,14 @@ import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import {
   formatProjectDate,
   createClassifyFilesJob,
+  createExtractOpenPointsJob,
   createExtractAllJob,
   createGenerateAudPlanJob,
   getAudPlan,
   getProject,
   getSourcePriorityReport,
   listExtractedContent,
+  listOpenPoints,
   listProjectJobs,
   listProjectFiles,
   sourceRoleLabels,
@@ -22,6 +24,7 @@ import {
   type AUDPlanJson,
   type ExtractedContent,
   type Job,
+  type OpenPoint,
   type Project,
   type SourceRole,
   type SourcePriorityReport,
@@ -125,12 +128,24 @@ function buildCountSummary(jsonContent: ExtractedContentJson) {
   return counts.length > 0 ? counts.join(" / ") : "Not available";
 }
 
+function buildEvidencePreview(value: string | null) {
+  if (!value) {
+    return "Not available";
+  }
+
+  const normalizedValue = value.trim().replace(/\s+/g, " ");
+  return normalizedValue.length > 180
+    ? `${normalizedValue.slice(0, 180).trim()}...`
+    : normalizedValue;
+}
+
 export default function ProjectDetailPage() {
   const params = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [extractedContents, setExtractedContents] = useState<ExtractedContent[]>([]);
+  const [openPoints, setOpenPoints] = useState<OpenPoint[]>([]);
   const [audPlan, setAudPlan] = useState<AUDPlan | null>(null);
   const [sourcePriorityReport, setSourcePriorityReport] =
     useState<SourcePriorityReport | null>(null);
@@ -141,18 +156,21 @@ export default function ProjectDetailPage() {
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [isLoadingExtractedContent, setIsLoadingExtractedContent] = useState(true);
+  const [isLoadingOpenPoints, setIsLoadingOpenPoints] = useState(true);
   const [isLoadingAudPlan, setIsLoadingAudPlan] = useState(true);
   const [isLoadingSourcePriority, setIsLoadingSourcePriority] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [isCreatingJob, setIsCreatingJob] = useState(false);
   const [isCreatingExtractAllJob, setIsCreatingExtractAllJob] = useState(false);
   const [isCreatingAudPlanJob, setIsCreatingAudPlanJob] = useState(false);
+  const [isCreatingOpenPointsJob, setIsCreatingOpenPointsJob] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
   const [extractedContentMessage, setExtractedContentMessage] = useState<string | null>(
     null,
   );
+  const [openPointsMessage, setOpenPointsMessage] = useState<string | null>(null);
   const [audPlanMessage, setAudPlanMessage] = useState<string | null>(null);
   const [sourcePriorityMessage, setSourcePriorityMessage] = useState<string | null>(
     null,
@@ -197,6 +215,20 @@ export default function ProjectDetailPage() {
       setExtractedContentMessage(`Unable to load extracted content: ${detail}`);
     } finally {
       setIsLoadingExtractedContent(false);
+    }
+  }
+
+  async function refreshOpenPoints(projectId: string) {
+    setIsLoadingOpenPoints(true);
+    setOpenPointsMessage(null);
+
+    try {
+      setOpenPoints(await listOpenPoints(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setOpenPointsMessage(`Unable to load open points: ${detail}`);
+    } finally {
+      setIsLoadingOpenPoints(false);
     }
   }
 
@@ -247,6 +279,7 @@ export default function ProjectDetailPage() {
     void refreshFiles(params.projectId);
     void refreshJobs(params.projectId);
     void refreshExtractedContent(params.projectId);
+    void refreshOpenPoints(params.projectId);
     void refreshAudPlan(params.projectId);
     void refreshSourcePriority(params.projectId);
   }, [params.projectId]);
@@ -326,6 +359,22 @@ export default function ProjectDetailPage() {
       setJobMessage(`Unable to create job: ${detail}`);
     } finally {
       setIsCreatingAudPlanJob(false);
+    }
+  }
+
+  async function handleCreateOpenPointsJob() {
+    setIsCreatingOpenPointsJob(true);
+    setJobMessage(null);
+
+    try {
+      await createExtractOpenPointsJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setJobMessage("Extract Open Points job created.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setJobMessage(`Unable to create job: ${detail}`);
+    } finally {
+      setIsCreatingOpenPointsJob(false);
     }
   }
 
@@ -483,6 +532,14 @@ export default function ProjectDetailPage() {
                   <button
                     type="button"
                     className="secondary-button"
+                    onClick={handleCreateOpenPointsJob}
+                    disabled={isCreatingOpenPointsJob}
+                  >
+                    {isCreatingOpenPointsJob ? "Creating..." : "Extract Open Points"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
                     onClick={handleCreateClassifyJob}
                     disabled={isCreatingJob}
                   >
@@ -630,6 +687,65 @@ export default function ProjectDetailPage() {
                       </article>
                     ))}
                   </div>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="panel" aria-labelledby="open-points-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="open-points-title">Open Points</h2>
+                  <p className="muted-text">
+                    Review unresolved questions extracted from project sources.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={() => refreshOpenPoints(params.projectId)}
+                  disabled={isLoadingOpenPoints}
+                >
+                  Refresh Open Points
+                </button>
+              </div>
+
+              {openPointsMessage ? (
+                <p className="status-message">{openPointsMessage}</p>
+              ) : null}
+
+              {isLoadingOpenPoints ? (
+                <p className="muted-text">Loading open points...</p>
+              ) : null}
+
+              {!isLoadingOpenPoints && openPoints.length === 0 ? (
+                <p className="muted-text">No open points extracted yet.</p>
+              ) : null}
+
+              {!isLoadingOpenPoints && openPoints.length > 0 ? (
+                <div className="open-points-table-wrap">
+                  <table className="open-points-table">
+                    <thead>
+                      <tr>
+                        <th scope="col">#</th>
+                        <th scope="col">Topic</th>
+                        <th scope="col">Question</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Evidence Preview</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {openPoints.map((openPoint, index) => (
+                        <tr key={openPoint.id}>
+                          <td>{index + 1}</td>
+                          <td>{openPoint.topic}</td>
+                          <td>{openPoint.question}</td>
+                          <td>{openPoint.status}</td>
+                          <td>{buildEvidencePreview(openPoint.evidence)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               ) : null}
             </section>

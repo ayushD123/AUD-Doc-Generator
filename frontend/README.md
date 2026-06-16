@@ -81,6 +81,8 @@ Manual checks:
 - Confirm the jobs list refreshes with a pending `extract_all` job.
 - In Jobs, click Generate AUD Plan.
 - Confirm the jobs list refreshes with a pending `generate_aud_plan` job.
+- In Jobs, click Extract Open Points.
+- Confirm the jobs list refreshes with a pending `extract_open_points` job.
 - In Jobs, click Classify Files.
 - Confirm the jobs list refreshes with a pending `classify_files` job.
 - In a backend terminal, run `python -m app.workers.local_worker`.
@@ -90,6 +92,10 @@ Manual checks:
 - Click Refresh AUD Plan.
 - Expected result before plan generation: the card shows `No AUD plan generated yet.`
 - After backend AUD plan generation has run, expected result: the card shows whether the default template is required and lists planned sections in order with title, confidence, include flag, source role basis, and notes.
+- Confirm the Open Points card appears on the project detail page.
+- Click Refresh Open Points.
+- Expected result before extraction: the card shows `No open points extracted yet.`
+- After backend Open Points extraction has run, expected result: the card shows a read-only table with index, topic, question, status, and evidence preview.
 - Confirm the Source Priority card appears on the project detail page.
 - Click Refresh Source Priority.
 - Expected result: the card shows explicit template status, FDD golden source status, source roles present, priority order, warnings, and whether the default SCM template will be needed later.
@@ -112,8 +118,10 @@ GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/files
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/classify-files
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/extract-all
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/generate-aud-plan
+POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/extract-open-points
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/extracted-content
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/source-priority-report
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/aud-plan
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/open-points
 ```

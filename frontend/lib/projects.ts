@@ -112,6 +112,19 @@ export type AUDPlanJson = {
   sections?: AUDPlanSection[];
 };
 
+export type OpenPoint = {
+  id: string;
+  project_id: string;
+  topic: string;
+  question: string;
+  status: string;
+  source_file_id: string | null;
+  source_content_id: string | null;
+  evidence: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 export const sourceRoles: SourceRole[] = [
   "template_aud",
   "final_aud_sample",
@@ -214,6 +227,10 @@ export async function getAudPlan(projectId: string) {
   return (await response.json()) as AUDPlan;
 }
 
+export function listOpenPoints(projectId: string) {
+  return requestJson<OpenPoint[]>(`/projects/${projectId}/open-points`);
+}
+
 export function createClassifyFilesJob(projectId: string) {
   return requestJson<Job>(`/projects/${projectId}/jobs/classify-files`, {
     method: "POST",
@@ -228,6 +245,12 @@ export function createExtractAllJob(projectId: string) {
 
 export function createGenerateAudPlanJob(projectId: string) {
   return requestJson<Job>(`/projects/${projectId}/jobs/generate-aud-plan`, {
+    method: "POST",
+  });
+}
+
+export function createExtractOpenPointsJob(projectId: string) {
+  return requestJson<Job>(`/projects/${projectId}/jobs/extract-open-points`, {
     method: "POST",
   });
 }

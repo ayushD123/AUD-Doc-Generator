@@ -315,6 +315,42 @@ h3 {
   line-height: 1.5;
 }
 
+.open-points-table-wrap {
+  overflow-x: auto;
+}
+
+.open-points-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.open-points-table th,
+.open-points-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 12px;
+  text-align: left;
+  vertical-align: top;
+  line-height: 1.45;
+}
+
+.open-points-table th {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.open-points-table td {
+  overflow-wrap: anywhere;
+}
+
+.open-points-table td:first-child {
+  width: 52px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
 .source-priority-content {
   display: grid;
   gap: 18px;
