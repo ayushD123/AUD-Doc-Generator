@@ -10,6 +10,21 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
 from app.models import Job, Project, UploadedFile
+from app.services.job_queue import get_job_queue_service
+
+
+class FakeJobQueueService:
+    def __init__(self) -> None:
+        self.published_jobs: list[dict[str, str]] = []
+
+    def publish_job(self, job: Job) -> None:
+        self.published_jobs.append(
+            {
+                "job_id": job.id,
+                "project_id": job.project_id,
+                "job_type": job.job_type,
+            }
+        )
 
 
 @pytest.fixture()
@@ -139,6 +154,33 @@ def test_create_classify_files_job(client: TestClient) -> None:
     assert job["status"] == "pending"
     assert job["progress"] == 0
     assert job["message"] == "File classification job queued."
+
+
+def test_create_job_publishes_to_configured_queue_service(
+    client: TestClient,
+) -> None:
+    fake_queue_service = FakeJobQueueService()
+    client.app.dependency_overrides[get_job_queue_service] = lambda: fake_queue_service
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(f"/projects/{project_id}/jobs/generate-docx")
+
+    assert response.status_code == 201
+    job = response.json()
+    assert fake_queue_service.published_jobs == [
+        {
+            "job_id": job["id"],
+            "project_id": project_id,
+            "job_type": "generate_docx",
+        }
+    ]
 
 
 def test_create_classify_files_job_returns_404_for_unknown_project(

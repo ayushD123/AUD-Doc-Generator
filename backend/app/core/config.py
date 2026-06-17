@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "local"
     DATABASE_URL: str = "sqlite:///./aud_generator.db"
     STORAGE_BACKEND: str = "local"
+    JOB_QUEUE_BACKEND: str = "local"
     LOCAL_STORAGE_ROOT: str = "storage"
     OCI_BUCKET_NAME: str | None = None
     OCI_NAMESPACE: str | None = None
@@ -15,6 +16,8 @@ class Settings(BaseSettings):
     OCI_COMPARTMENT_OCID: str | None = None
     OCI_CONFIG_FILE: str | None = None
     OCI_PROFILE: str | None = None
+    OCI_QUEUE_OCID: str | None = None
+    OCI_QUEUE_ENDPOINT: str | None = None
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",

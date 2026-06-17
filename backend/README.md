@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include OCI Queue, speech transcription, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, speech transcription, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -244,9 +244,18 @@ Allowed `source_role` values:
 template_aud, final_aud_sample, fdd, kt_ppt, kt_session, kt_transcript, config_workbook, supporting_doc, unknown
 ```
 
-## Local Async Jobs
+## Async Jobs
 
-Jobs are stored in the local database. No Redis, Celery, or OCI Queue is used yet.
+Jobs are always stored in the database first. `JOB_QUEUE_BACKEND=local` keeps
+the existing local polling flow, and `JOB_QUEUE_BACKEND=oci` additionally
+publishes a message to OCI Queue after the `Job` row is created. Redis and
+Celery are not used.
+
+Local mode is the default:
+
+```text
+JOB_QUEUE_BACKEND=local
+```
 
 Create a file classification job:
 
@@ -318,7 +327,7 @@ Run the local worker manually from the `backend/` directory:
 python -m app.workers.local_worker
 ```
 
-The worker picks pending local jobs and simulates processing:
+The local worker picks pending jobs from the database and processes:
 
 - `classify_files`: assigns uploaded file types from extensions.
 - `extract_transcripts`: reads `.txt` uploads only and stores extracted transcript text.
@@ -337,6 +346,39 @@ Check job status:
 ```powershell
 curl.exe "http://127.0.0.1:8000/projects/{project_id}/jobs"
 ```
+
+### OCI Queue Mode
+
+OCI Queue is optional. In this mode the API still saves the `Job` row locally,
+then publishes a queue message containing `job_id`, `project_id`, and
+`job_type`.
+
+Required queue settings:
+
+```powershell
+$env:JOB_QUEUE_BACKEND = "oci"
+$env:OCI_QUEUE_OCID = "<queue-ocid>"
+$env:OCI_QUEUE_ENDPOINT = "https://cell-1.queue.messaging.<region>.oci.oraclecloud.com"
+```
+
+Use the same OCI SDK config-file authentication settings described for Object
+Storage when running outside OCI:
+
+```powershell
+$env:OCI_CONFIG_FILE = "$env:USERPROFILE\.oci\config"
+$env:OCI_PROFILE = "DEFAULT"
+$env:OCI_REGION = "us-ashburn-1"
+```
+
+Run the OCI worker from the `backend/` directory:
+
+```powershell
+python -m app.workers.oci_queue_worker
+```
+
+The OCI worker consumes queue messages, processes the referenced job through
+the existing job processors, deletes the message after successful processing,
+and marks the database job as `failed` when processing raises an error.
 
 Current simulated classification mapping:
 
@@ -665,7 +707,7 @@ Expected results:
 - The document contains a title page, version history table, Purpose and Scope placeholder, planned section headings, supported rule-based section content or clear placeholders, unresolved open points table, and internal review note.
 - Matching PPT images appear below relevant planned sections with source slide captions when extracted image files exist locally.
 - If an earlier AUD plan was generated before extraction or before FDD content was available, the DOCX job refreshes the plan so extracted FDD/PPT sections can appear and FDD can win.
-- No LLM call, OCI Queue, OCR, image interpretation, or template-perfect formatting is used.
+- No LLM call, OCR, image interpretation, or template-perfect formatting is used.
 
 ## Run Tests
 
