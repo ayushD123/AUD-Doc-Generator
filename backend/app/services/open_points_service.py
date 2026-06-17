@@ -12,15 +12,16 @@ OPEN_ITEM_INDICATORS = [
     "needs more discussion",
     "to be confirmed",
     "tbd",
+    "pending",
     "awaiting confirmation",
-    
+    "open item",
     "confirm with",
     "another session",
     "not finalized",
     "will be confirmed",
 ]
 EXPLICIT_OPEN_SECTION_TITLES = [
-
+    "Open Items",
     "Open Points",
     "Open and Close Issues",
     "Gaps and Resolutions",

@@ -181,7 +181,7 @@ def test_generate_aud_plan_uses_ppt_slide_titles_without_fdd(
             session,
             project_id,
             "order-flow.pptx",
-            "kt_ppt",
+            "unknown",
             "pptx",
         )
         add_extracted_content(
@@ -190,13 +190,32 @@ def test_generate_aud_plan_uses_ppt_slide_titles_without_fdd(
             ppt_file,
             "pptx",
             {
-                "source_role": "kt_ppt",
+                "source_role": "unknown",
                 "slides": [
                     {"slide_number": 1, "title": "Welcome"},
                     {"slide_number": 2, "title": "Agenda"},
-                    {"slide_number": 3, "title": "Fulfillment Flow"},
-                    {"slide_number": 4, "title": "Shipping Confirmation"},
-                    {"slide_number": 5, "title": "Thank You"},
+                    {
+                        "slide_number": 3,
+                        "title": "Huber OM KT Session",
+                        "texts": ["Orchestration Processes and Order Types"],
+                    },
+                    {
+                        "slide_number": 4,
+                        "title": "Fulfillment Flow",
+                        "texts": ["Reserve inventory and release shipment."],
+                    },
+                    {
+                        "slide_number": 5,
+                        "title": "Shipping Confirmation",
+                        "image_count": 1,
+                    },
+                    {
+                        "slide_number": 6,
+                        "title": "Blank Divider",
+                        "texts": [],
+                        "image_count": 0,
+                    },
+                    {"slide_number": 7, "title": "Thank You"},
                 ],
             },
         )
@@ -210,6 +229,8 @@ def test_generate_aud_plan_uses_ppt_slide_titles_without_fdd(
     assert "Shipping Confirmation" in section_titles
     assert "Welcome" not in section_titles
     assert "Agenda" not in section_titles
+    assert "Huber OM KT Session" not in section_titles
+    assert "Blank Divider" not in section_titles
     assert "Thank You" not in section_titles
     fulfillment_flow = next(
         section for section in plan["sections"] if section["title"] == "Fulfillment Flow"

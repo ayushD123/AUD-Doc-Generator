@@ -14,6 +14,7 @@ from app.db.session import get_db
 from app.main import create_app
 from app.models import Job
 from app.services.file_storage import LocalFileStorageService, get_file_storage
+from app.services.pptx_extraction import extract_pptx
 from app.workers.local_worker import (
     process_extract_all_job,
     process_extract_docx_job,
@@ -263,6 +264,61 @@ def create_pptx_fixture(tmp_path: Path) -> bytes:
     return buffer.getvalue()
 
 
+def test_extract_pptx_infers_title_from_top_text_box(tmp_path: Path) -> None:
+    pptx = pytest.importorskip("pptx")
+    pptx_util = pytest.importorskip("pptx.util")
+
+    presentation = pptx.Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+
+    title_box = slide.shapes.add_textbox(
+        pptx_util.Inches(0.7),
+        pptx_util.Inches(0.5),
+        pptx_util.Inches(8),
+        pptx_util.Inches(0.5),
+    )
+    title_box.text_frame.text = "Export Order Process"
+
+    body_box = slide.shapes.add_textbox(
+        pptx_util.Inches(0.7),
+        pptx_util.Inches(1.5),
+        pptx_util.Inches(8),
+        pptx_util.Inches(1),
+    )
+    body_box.text_frame.text = "Create quotation and submit accepted order."
+
+    footer_box = slide.shapes.add_textbox(
+        pptx_util.Inches(0.7),
+        pptx_util.Inches(6.9),
+        pptx_util.Inches(5),
+        pptx_util.Inches(0.3),
+    )
+    footer_box.text_frame.text = "Confidential - Oracle Restricted"
+
+    page_number_box = slide.shapes.add_textbox(
+        pptx_util.Inches(0.3),
+        pptx_util.Inches(6.9),
+        pptx_util.Inches(0.4),
+        pptx_util.Inches(0.3),
+    )
+    page_number_box.text_frame.text = "3"
+
+    pptx_path = tmp_path / "inferred-title.pptx"
+    presentation.save(pptx_path)
+
+    extracted = extract_pptx(
+        pptx_path,
+        tmp_path / "images",
+        "projects/test/extracted_images/inferred-title",
+    )
+    slide_json = extracted["json_content"]["slides"][0]
+
+    assert slide_json["title"] == "Export Order Process"
+    assert slide_json["texts"] == ["Create quotation and submit accepted order."]
+    assert "Title: Export Order Process" in extracted["text_content"]
+    assert "Confidential" not in extracted["text_content"]
+
+
 def test_extract_pptx_from_uploaded_kt_ppt(
     client_and_session: tuple[TestClient, sessionmaker],
     tmp_path: Path,
@@ -329,7 +385,6 @@ def test_extract_pptx_from_uploaded_kt_ppt(
     assert len(json_content["image_paths"]) == 1
     assert json_content["slides"][0]["title"] == "Fulfillment Flow"
     assert json_content["slides"][0]["texts"] == [
-        "Fulfillment Flow",
         "Reserve inventory and release shipment.",
     ]
     assert json_content["slides"][0]["tables"] == [
@@ -339,6 +394,7 @@ def test_extract_pptx_from_uploaded_kt_ppt(
         }
     ]
     assert json_content["slides"][0]["image_count"] == 1
+    assert json_content["slides"][0]["image_paths"] == json_content["image_paths"]
 
     saved_image_path = client.storage_root / json_content["image_paths"][0]
     assert saved_image_path.exists()

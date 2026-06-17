@@ -2,7 +2,7 @@
 
 Next.js TypeScript frontend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, local file upload UI, job controls, and extracted content review that calls the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing in the frontend, complex styling, editing extracted content, or AUD generation.
+This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, local file upload UI, job controls, extracted content review, and generated document download controls that call the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing in the frontend, complex styling, or editing generated AUD content in the browser.
 
 ## Prerequisites
 
@@ -85,6 +85,8 @@ Manual checks:
 - Confirm the jobs list refreshes with a pending `extract_open_points` job.
 - In Jobs, click Classify Files.
 - Confirm the jobs list refreshes with a pending `classify_files` job.
+- In Generated Documents, click Generate DOCX.
+- Confirm the jobs list refreshes with a pending `generate_docx` job.
 - In a backend terminal, run `python -m app.workers.local_worker`.
 - Click Refresh Jobs and confirm the job status/progress updates.
 - Expected result for Extract All Files: the job reaches `completed` at `100%`, or `completed_with_warnings` if some files extracted and some failed.
@@ -105,7 +107,12 @@ Manual checks:
 - After backend DOCX or transcript extraction has run, expected result: the card lists extracted records with title, content type, created date, source role when present, golden source status, and available counts.
 - Open Preview on an extracted record.
 - Expected result: extracted text appears only inside the collapsed Preview area and stays within a scrollable max-height region.
-- Confirm the detail page still shows the placeholder section for Generated Documents.
+- Confirm the Generated Documents card appears on the project detail page.
+- Click Refresh Documents.
+- Expected result before DOCX generation: the card shows `No generated documents yet.`
+- After backend DOCX generation has run, expected result: the card lists each generated document filename, created date, and a Download DOCX link.
+- Click Download DOCX.
+- Expected result: the browser downloads the file from the backend generated document download endpoint.
 
 The frontend calls:
 
@@ -119,9 +126,12 @@ POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/classify-files
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/extract-all
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/generate-aud-plan
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/extract-open-points
+POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/generate-docx
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/extracted-content
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/source-priority-report
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/aud-plan
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/open-points
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/generated-documents
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/generated-documents/{documentId}/download
 ```

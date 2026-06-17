@@ -217,7 +217,8 @@ h3 {
 .file-list,
 .job-list,
 .aud-plan-section-list,
-.extracted-content-list {
+.extracted-content-list,
+.generated-document-list {
   display: grid;
   gap: 12px;
 }
@@ -226,7 +227,8 @@ h3 {
 .file-row,
 .job-row,
 .aud-plan-section-row,
-.extracted-content-row {
+.extracted-content-row,
+.generated-document-row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
   gap: 20px;
@@ -245,7 +247,8 @@ h3 {
 .file-row p,
 .job-row p,
 .aud-plan-section-row p,
-.extracted-content-row p {
+.extracted-content-row p,
+.generated-document-row p {
   margin-top: 4px;
   color: var(--muted);
   line-height: 1.5;
@@ -259,7 +262,8 @@ h3 {
 .aud-plan-meta,
 .aud-plan-section-meta,
 .source-priority-meta,
-.extracted-content-meta {
+.extracted-content-meta,
+.generated-document-meta {
   display: grid;
   gap: 14px;
 }
@@ -270,7 +274,8 @@ h3 {
 .aud-plan-meta,
 .aud-plan-section-meta,
 .source-priority-meta,
-.extracted-content-meta {
+.extracted-content-meta,
+.generated-document-meta {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -282,8 +287,25 @@ h3 {
   grid-template-columns: 1fr;
 }
 
+.generated-document-row {
+  grid-template-columns: minmax(0, 1fr) minmax(240px, 0.7fr);
+}
+
 .extracted-content-meta {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.generated-document-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.download-link {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.download-link:hover {
+  color: var(--accent-hover);
 }
 
 .aud-plan-content {
@@ -447,26 +469,6 @@ dd {
   font-weight: 700;
 }
 
-.placeholder-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.placeholder-section {
-  min-height: 128px;
-  display: grid;
-  align-content: space-between;
-  padding: 20px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-}
-
-.placeholder-section p {
-  color: var(--muted);
-}
-
 @media (max-width: 760px) {
   .page-shell {
     padding: 24px;
@@ -483,6 +485,7 @@ dd {
   .job-row,
   .aud-plan-section-row,
   .extracted-content-row,
+  .generated-document-row,
   .project-meta,
   .file-meta,
   .job-meta,
@@ -490,8 +493,8 @@ dd {
   .aud-plan-section-meta,
   .source-priority-meta,
   .extracted-content-meta,
-  .metadata-grid,
-  .placeholder-grid {
+  .generated-document-meta,
+  .metadata-grid {
     grid-template-columns: 1fr;
   }
 

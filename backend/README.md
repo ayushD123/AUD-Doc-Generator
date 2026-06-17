@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, and pytest coverage. It does not include OCI integration, authentication, LLM calls, AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based local DOCX draft generation, and pytest coverage. It does not include OCI integration, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -93,6 +93,18 @@ projects/{project_id}/uploads/{generated_filename}.pdf
 
 This keeps local storage behind a service class so it can later be replaced with OCI Object Storage without changing route behavior.
 
+Generated DOCX drafts are stored locally under:
+
+```text
+backend/storage/projects/{project_id}/outputs/
+```
+
+The database stores a relative generated document storage path such as:
+
+```text
+projects/{project_id}/outputs/{generated_filename}.docx
+```
+
 Default storage root:
 
 ```text
@@ -138,12 +150,15 @@ POST /projects/{project_id}/jobs/extract-spreadsheets
 POST /projects/{project_id}/jobs/extract-all
 POST /projects/{project_id}/jobs/generate-aud-plan
 POST /projects/{project_id}/jobs/extract-open-points
+POST /projects/{project_id}/jobs/generate-docx
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
 GET  /projects/{project_id}/extracted-content
 GET  /projects/{project_id}/source-priority-report
 GET  /projects/{project_id}/aud-plan
 GET  /projects/{project_id}/open-points
+GET  /projects/{project_id}/generated-documents
+GET  /projects/{project_id}/generated-documents/{document_id}/download
 ```
 
 ## File Upload Examples
@@ -234,11 +249,17 @@ Create an open points extraction job:
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-open-points"
 ```
 
+Create a local editable DOCX generation job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-docx"
+```
+
 Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | extract_open_points",
+  "job_type": "classify_files | extract_transcripts | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | extract_open_points | generate_docx",
   "status": "pending",
   "progress": 0
 }
@@ -260,6 +281,7 @@ The worker picks pending local jobs and simulates processing:
 - `extract_all`: runs transcript, DOCX, PPTX, and spreadsheet extraction in one job.
 - `generate_aud_plan`: creates a deterministic draft AUD plan JSON from extracted content and source-priority rules.
 - `extract_open_points`: scans extracted content for unresolved questions and stores deduplicated open points.
+- `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, and unresolved open points.
 
 `extract_all` progress moves across extraction stages. If some files fail and at least one file succeeds, the job ends as `completed_with_warnings`. If all attempted files fail, the job ends as `failed`.
 
@@ -349,8 +371,14 @@ Extracted PPTX records include:
 content_type = pptx
 title = original filename
 text_content = readable slide-by-slide text
-json_content = slide_count, slides, image_paths, table_count, total_image_count, and source_role
+json_content = slide_count, slides, slide-level image_paths, presentation-level image_paths, table_count, total_image_count, and source_role
 ```
+
+PPTX extraction reads the PowerPoint title placeholder when available. If a deck
+uses regular text boxes for visible slide titles, extraction infers the title
+from top-of-slide text and filters common footer/page-number noise from slide
+body text. PPTX records with `unknown` source role are treated as KT PPT input
+for deterministic AUD planning and DOCX rendering in this local v1 flow.
 
 Extracted spreadsheet records include:
 
@@ -360,6 +388,26 @@ title = original filename
 text_content = readable workbook and sheet summaries with selected rows
 json_content = workbook metadata, visible sheets, extracted rows, and source_role
 ```
+
+Current DOCX generation scope:
+
+- Uses the latest AUD plan and mapped extracted content only.
+- If the latest AUD plan is missing, contains only standard sections, or predates extracted FDD content, DOCX generation refreshes the deterministic AUD plan before rendering.
+- Does not call an LLM.
+- Gives mapped FDD content priority over PPT content.
+- For PPT-only projects, AUD planning uses meaningful slide titles and skips low-value title/session/agenda slides.
+- For planned sections based on FDD headings, includes text under the matching heading until the next heading.
+- For planned sections based on PPT slide titles, includes text, table rows, and notes from the matching slide.
+- Inserts local PPT images when the slide title matches or strongly resembles a planned section title, or when a mapped PPT slide has images and meaningful text.
+- Excludes obvious low-value PPT slides such as Welcome, Thank You, Agenda, and blank divider slides.
+- Resizes inserted PPT images to the usable DOCX page width and adds captions such as `Source image from slide X: <slide title>`.
+- Includes up to 3 PPT images per section for now.
+- Skips PPT images in formats `python-docx` cannot embed directly, such as WMF vector images.
+- If section content is too long, includes the first meaningful paragraphs and adds `Additional details available in source document.`
+- If no supported mapped content is available, writes `<Content not available in provided source material>`.
+- Open Points includes unresolved items only.
+- Unsupported source mappings are left as placeholders rather than inferred.
+- PPT image placement uses only local extracted image paths; no OCR or image understanding is performed.
 
 ## Manual DOCX Extraction Test
 
@@ -539,6 +587,35 @@ Expected results:
 - Transcript statements that another session is needed or confirmation is required create Open Points.
 - If FDD is clear, non-FDD conflicts do not create Open Points.
 - If FDD is absent, non-FDD conflicts can create Open Points.
+
+## Manual DOCX Generation Test
+
+Run extraction, AUD plan generation, and open point extraction first when source material is available, then run:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-docx"
+
+python -m app.workers.local_worker
+
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/generated-documents"
+```
+
+Copy the returned generated document `id`, then download:
+
+```powershell
+curl.exe -L "http://127.0.0.1:8000/projects/{project_id}/generated-documents/{document_id}/download" `
+  -o ".\aud-draft.docx"
+```
+
+Expected results:
+
+- The `generate_docx` job reaches `completed` with `100` progress.
+- A generated document row is returned with `document_type` set to `aud_docx`.
+- The `.docx` file exists under `backend/storage/projects/{project_id}/outputs/`.
+- The document contains a title page, version history table, Purpose and Scope placeholder, planned section headings, supported rule-based section content or clear placeholders, unresolved open points table, and internal review note.
+- Matching PPT images appear below relevant planned sections with source slide captions when extracted image files exist locally.
+- If an earlier AUD plan was generated before extraction or before FDD content was available, the DOCX job refreshes the plan so extracted FDD/PPT sections can appear and FDD can win.
+- No LLM call, OCI storage, OCR, image interpretation, or template-perfect formatting is used.
 
 ## Run Tests
 

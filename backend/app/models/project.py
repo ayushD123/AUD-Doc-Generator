@@ -11,6 +11,7 @@ from app.db.base import Base, new_uuid, utc_now
 if TYPE_CHECKING:
     from app.models.aud_plan import AUDPlan
     from app.models.extracted_content import ExtractedContent
+    from app.models.generated_document import GeneratedDocument
     from app.models.job import Job
     from app.models.open_point import OpenPoint
     from app.models.uploaded_file import UploadedFile
@@ -54,6 +55,10 @@ class Project(Base):
         cascade="all, delete-orphan",
     )
     open_points: Mapped[list["OpenPoint"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    generated_documents: Mapped[list["GeneratedDocument"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )

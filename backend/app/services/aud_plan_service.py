@@ -68,7 +68,25 @@ def is_low_value_slide_title(title: str) -> bool:
     if normalized_title in LOW_VALUE_SLIDE_TITLES:
         return True
 
-    return normalized_title.startswith("agenda:")
+    if normalized_title.startswith("agenda:"):
+        return True
+
+    return "kt session" in normalized_title or "knowledge transfer" in normalized_title
+
+
+def slide_has_meaningful_content(slide: dict[str, Any]) -> bool:
+    texts = slide.get("texts")
+    if isinstance(texts, list) and any(
+        isinstance(text, str) and text.strip() for text in texts
+    ):
+        return True
+
+    tables = slide.get("tables")
+    if isinstance(tables, list) and tables:
+        return True
+
+    image_count = slide.get("image_count")
+    return isinstance(image_count, int) and image_count > 0
 
 
 def make_section_id(index: int, title: str) -> str:
@@ -119,11 +137,17 @@ def get_source_role(
 ) -> str:
     uploaded_file = uploaded_file_by_id.get(extracted_content.uploaded_file_id)
 
-    if uploaded_file and uploaded_file.source_role:
+    if uploaded_file and uploaded_file.source_role not in {None, "unknown"}:
         return uploaded_file.source_role
 
     source_role = json_content.get("source_role")
-    return source_role if isinstance(source_role, str) else "unknown"
+    if isinstance(source_role, str) and source_role != "unknown":
+        return source_role
+
+    if extracted_content.content_type == "pptx":
+        return "kt_ppt"
+
+    return "unknown"
 
 
 def build_fdd_candidates(
@@ -219,6 +243,9 @@ def build_ppt_candidates(
 
             title = slide.get("title")
             if not isinstance(title, str) or is_low_value_slide_title(title):
+                continue
+
+            if not slide_has_meaningful_content(slide):
                 continue
 
             slide_number = slide.get("slide_number")

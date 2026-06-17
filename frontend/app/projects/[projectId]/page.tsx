@@ -10,10 +10,13 @@ import {
   createExtractOpenPointsJob,
   createExtractAllJob,
   createGenerateAudPlanJob,
+  createGenerateDocxJob,
   getAudPlan,
+  getGeneratedDocumentDownloadUrl,
   getProject,
   getSourcePriorityReport,
   listExtractedContent,
+  listGeneratedDocuments,
   listOpenPoints,
   listProjectJobs,
   listProjectFiles,
@@ -23,6 +26,7 @@ import {
   type AUDPlan,
   type AUDPlanJson,
   type ExtractedContent,
+  type GeneratedDocument,
   type Job,
   type OpenPoint,
   type Project,
@@ -30,10 +34,6 @@ import {
   type SourcePriorityReport,
   type UploadedFile,
 } from "@/lib/projects";
-
-const placeholderSections = [
-  "Generated Documents",
-];
 
 type ExtractedContentMetadata = {
   paragraph_count?: number;
@@ -146,6 +146,7 @@ export default function ProjectDetailPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [extractedContents, setExtractedContents] = useState<ExtractedContent[]>([]);
   const [openPoints, setOpenPoints] = useState<OpenPoint[]>([]);
+  const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocument[]>([]);
   const [audPlan, setAudPlan] = useState<AUDPlan | null>(null);
   const [sourcePriorityReport, setSourcePriorityReport] =
     useState<SourcePriorityReport | null>(null);
@@ -157,6 +158,7 @@ export default function ProjectDetailPage() {
   const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [isLoadingExtractedContent, setIsLoadingExtractedContent] = useState(true);
   const [isLoadingOpenPoints, setIsLoadingOpenPoints] = useState(true);
+  const [isLoadingGeneratedDocuments, setIsLoadingGeneratedDocuments] = useState(true);
   const [isLoadingAudPlan, setIsLoadingAudPlan] = useState(true);
   const [isLoadingSourcePriority, setIsLoadingSourcePriority] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -164,6 +166,7 @@ export default function ProjectDetailPage() {
   const [isCreatingExtractAllJob, setIsCreatingExtractAllJob] = useState(false);
   const [isCreatingAudPlanJob, setIsCreatingAudPlanJob] = useState(false);
   const [isCreatingOpenPointsJob, setIsCreatingOpenPointsJob] = useState(false);
+  const [isCreatingDocxJob, setIsCreatingDocxJob] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
@@ -171,6 +174,9 @@ export default function ProjectDetailPage() {
     null,
   );
   const [openPointsMessage, setOpenPointsMessage] = useState<string | null>(null);
+  const [generatedDocumentsMessage, setGeneratedDocumentsMessage] = useState<
+    string | null
+  >(null);
   const [audPlanMessage, setAudPlanMessage] = useState<string | null>(null);
   const [sourcePriorityMessage, setSourcePriorityMessage] = useState<string | null>(
     null,
@@ -232,6 +238,20 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function refreshGeneratedDocuments(projectId: string) {
+    setIsLoadingGeneratedDocuments(true);
+    setGeneratedDocumentsMessage(null);
+
+    try {
+      setGeneratedDocuments(await listGeneratedDocuments(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setGeneratedDocumentsMessage(`Unable to load generated documents: ${detail}`);
+    } finally {
+      setIsLoadingGeneratedDocuments(false);
+    }
+  }
+
   async function refreshAudPlan(projectId: string) {
     setIsLoadingAudPlan(true);
     setAudPlanMessage(null);
@@ -280,6 +300,7 @@ export default function ProjectDetailPage() {
     void refreshJobs(params.projectId);
     void refreshExtractedContent(params.projectId);
     void refreshOpenPoints(params.projectId);
+    void refreshGeneratedDocuments(params.projectId);
     void refreshAudPlan(params.projectId);
     void refreshSourcePriority(params.projectId);
   }, [params.projectId]);
@@ -375,6 +396,24 @@ export default function ProjectDetailPage() {
       setJobMessage(`Unable to create job: ${detail}`);
     } finally {
       setIsCreatingOpenPointsJob(false);
+    }
+  }
+
+  async function handleCreateDocxJob() {
+    setIsCreatingDocxJob(true);
+    setGeneratedDocumentsMessage(null);
+
+    try {
+      await createGenerateDocxJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setGeneratedDocumentsMessage(
+        "Generate DOCX job created. Run the local worker, then refresh generated documents.",
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setGeneratedDocumentsMessage(`Unable to create DOCX generation job: ${detail}`);
+    } finally {
+      setIsCreatingDocxJob(false);
     }
   }
 
@@ -921,13 +960,78 @@ export default function ProjectDetailPage() {
               </div>
             </section>
 
-            <section className="placeholder-grid" aria-label="Project workspace sections">
-              {placeholderSections.map((section) => (
-                <article key={section} className="placeholder-section">
-                  <h2>{section}</h2>
-                  <p>Not started</p>
-                </article>
-              ))}
+            <section className="panel" aria-labelledby="generated-documents-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="generated-documents-title">Generated Documents</h2>
+                  <p className="muted-text">
+                    Generate and download editable AUD drafts for internal review.
+                  </p>
+                </div>
+
+                <div className="button-group">
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={handleCreateDocxJob}
+                    disabled={isCreatingDocxJob}
+                  >
+                    {isCreatingDocxJob ? "Creating..." : "Generate DOCX"}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => refreshGeneratedDocuments(params.projectId)}
+                    disabled={isLoadingGeneratedDocuments}
+                  >
+                    Refresh Documents
+                  </button>
+                </div>
+              </div>
+
+              {generatedDocumentsMessage ? (
+                <p className="status-message">{generatedDocumentsMessage}</p>
+              ) : null}
+
+              {isLoadingGeneratedDocuments ? (
+                <p className="muted-text">Loading generated documents...</p>
+              ) : null}
+
+              {!isLoadingGeneratedDocuments && generatedDocuments.length === 0 ? (
+                <p className="muted-text">No generated documents yet.</p>
+              ) : null}
+
+              <div className="generated-document-list">
+                {generatedDocuments.map((document) => (
+                  <article key={document.id} className="generated-document-row">
+                    <div>
+                      <h3>{document.filename}</h3>
+                      <p>{document.document_type}</p>
+                    </div>
+
+                    <dl className="generated-document-meta">
+                      <div>
+                        <dt>Created</dt>
+                        <dd>{formatProjectDate(document.created_at)}</dd>
+                      </div>
+                      <div>
+                        <dt>Download</dt>
+                        <dd>
+                          <a
+                            className="download-link"
+                            href={getGeneratedDocumentDownloadUrl(
+                              params.projectId,
+                              document.id,
+                            )}
+                          >
+                            Download DOCX
+                          </a>
+                        </dd>
+                      </div>
+                    </dl>
+                  </article>
+                ))}
+              </div>
             </section>
           </>
         ) : null}

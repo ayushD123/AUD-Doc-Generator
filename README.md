@@ -6,7 +6,9 @@ This repository will evolve into a tool that helps generate Application Understa
 
 ## Current Phase
 
-The first phase is a clean, testable local development skeleton only. It intentionally does not include application code, dependency installation, Docker configuration, authentication, Redis, OCI integrations, LLM calls, or document extraction.
+The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace, local uploads, deterministic extraction, source priority reporting, AUD planning, open point extraction, and rule-based local editable DOCX draft output with frontend download controls.
+
+It intentionally does not include Docker configuration, authentication, Redis, OCI integrations, or LLM calls.
 
 ## Source Priority
 

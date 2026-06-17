@@ -125,6 +125,15 @@ export type OpenPoint = {
   updated_at: string | null;
 };
 
+export type GeneratedDocument = {
+  id: string;
+  project_id: string;
+  filename: string;
+  storage_path: string;
+  document_type: string;
+  created_at: string | null;
+};
+
 export const sourceRoles: SourceRole[] = [
   "template_aud",
   "final_aud_sample",
@@ -231,6 +240,19 @@ export function listOpenPoints(projectId: string) {
   return requestJson<OpenPoint[]>(`/projects/${projectId}/open-points`);
 }
 
+export function listGeneratedDocuments(projectId: string) {
+  return requestJson<GeneratedDocument[]>(
+    `/projects/${projectId}/generated-documents`,
+  );
+}
+
+export function getGeneratedDocumentDownloadUrl(
+  projectId: string,
+  documentId: string,
+) {
+  return `${getApiBaseUrl()}/projects/${projectId}/generated-documents/${documentId}/download`;
+}
+
 export function createClassifyFilesJob(projectId: string) {
   return requestJson<Job>(`/projects/${projectId}/jobs/classify-files`, {
     method: "POST",
@@ -251,6 +273,12 @@ export function createGenerateAudPlanJob(projectId: string) {
 
 export function createExtractOpenPointsJob(projectId: string) {
   return requestJson<Job>(`/projects/${projectId}/jobs/extract-open-points`, {
+    method: "POST",
+  });
+}
+
+export function createGenerateDocxJob(projectId: string) {
+  return requestJson<Job>(`/projects/${projectId}/jobs/generate-docx`, {
     method: "POST",
   });
 }

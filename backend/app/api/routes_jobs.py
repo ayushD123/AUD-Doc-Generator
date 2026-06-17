@@ -197,6 +197,23 @@ def create_extract_open_points_job(
     )
 
 
+@router.post(
+    "/generate-docx",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_generate_docx_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="generate_docx",
+        message="DOCX generation job queued.",
+        db=db,
+    )
+
+
 @router.get("", response_model=list[JobRead])
 def list_jobs(
     project_id: str,

@@ -589,6 +589,30 @@ def process_extract_open_points_job(
     session.commit()
 
 
+def process_generate_docx_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.docx_generation import generate_docx
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Generating DOCX draft."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    generated_document = generate_docx(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Generated DOCX document {generated_document.id}."
+    session.commit()
+
+
 def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
     create_db_and_tables()
     processed_count = 0
@@ -608,6 +632,7 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         "extract_all",
                         "generate_aud_plan",
                         "extract_open_points",
+                        "generate_docx",
                     ]
                 ),
             )
@@ -644,6 +669,12 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                     )
                 elif job.job_type == "extract_open_points":
                     process_extract_open_points_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "generate_docx":
+                    process_generate_docx_job(
                         session,
                         job,
                         sleep_seconds=sleep_seconds,
