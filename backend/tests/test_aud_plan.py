@@ -159,15 +159,150 @@ def test_generate_aud_plan_uses_fdd_headings(
         "Cover Page",
         "Document Version History",
         "Table of Contents",
+        "Enterprise Structure",
         "Order Capture",
         "Fulfillment Flow",
         "Open Points",
     ]
-    order_capture = plan["sections"][3]
+    enterprise_structure = plan["sections"][3]
+    assert enterprise_structure["source_role_basis"] == "required_placeholder"
+    order_capture = plan["sections"][4]
     assert order_capture["source_file_ids"] == [fdd_file.id]
     assert order_capture["source_role_basis"] == "fdd"
     assert order_capture["confidence"] == "high"
     assert order_capture["include_in_aud"] is True
+
+
+def test_generate_aud_plan_adds_non_duplicate_ppt_sections_with_fdd(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    client, session_local = client_and_session
+    project_id = create_project(client)
+
+    with session_local() as session:
+        fdd_file = add_uploaded_file(
+            session,
+            project_id,
+            "order-management-fdd.docx",
+            "fdd",
+            "docx",
+        )
+        ppt_file = add_uploaded_file(
+            session,
+            project_id,
+            "order-management-kt.pptx",
+            "kt_ppt",
+            "pptx",
+        )
+        add_extracted_content(
+            session,
+            project_id,
+            fdd_file,
+            "docx",
+            {
+                "source_role": "fdd",
+                "is_golden_source": True,
+                "headings": [
+                    {"text": "Order Capture", "level": 1},
+                    {"text": "Order and Quote Confirmation Reports", "level": 1},
+                ],
+            },
+        )
+        add_extracted_content(
+            session,
+            project_id,
+            ppt_file,
+            "pptx",
+            {
+                "source_role": "kt_ppt",
+                "slides": [
+                    {
+                        "slide_number": 1,
+                        "title": "Order Capture",
+                        "texts": ["Duplicate PPT section should not override FDD."],
+                    },
+                    {
+                        "slide_number": 2,
+                        "title": "Order and Quote Confirmation Print Logic",
+                        "texts": ["Similar to the FDD report heading."],
+                    },
+                    {
+                        "slide_number": 3,
+                        "title": "Pricing Assignments",
+                        "texts": ["Supporting PPT-only configuration section."],
+                    },
+                ],
+            },
+        )
+        session.commit()
+
+    plan = process_plan_job(client, session_local, project_id)
+    section_titles = [section["title"] for section in plan["sections"]]
+
+    assert plan["generation_basis"] == "fdd_headings_with_ppt_support"
+    assert section_titles == [
+        "Cover Page",
+        "Document Version History",
+        "Table of Contents",
+        "Enterprise Structure",
+        "Order Capture",
+        "Order and Quote Confirmation Reports",
+        "Pricing Assignments",
+        "Open Points",
+    ]
+    pricing_assignments = next(
+        section for section in plan["sections"] if section["title"] == "Pricing Assignments"
+    )
+    assert pricing_assignments["source_file_ids"] == [ppt_file.id]
+    assert pricing_assignments["source_role_basis"] == "kt_ppt"
+    assert pricing_assignments["confidence"] == "medium"
+
+
+def test_generate_aud_plan_detects_enterprise_structure_from_fdd_text(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    client, session_local = client_and_session
+    project_id = create_project(client)
+
+    with session_local() as session:
+        fdd_file = add_uploaded_file(
+            session,
+            project_id,
+            "order-management-fdd.docx",
+            "fdd",
+            "docx",
+        )
+        add_extracted_content(
+            session,
+            project_id,
+            fdd_file,
+            "docx",
+            {
+                "source_role": "fdd",
+                "is_golden_source": True,
+                "headings": [{"text": "Introduction", "level": 1}],
+            },
+            text_content=(
+                "[Heading: Introduction]\n\n"
+                "Introductory content.\n\n"
+                "Enterprise Structure\n\n"
+                "Business Unit: IT_BLCM_EUR_BU\n\n"
+                "[Heading: Order Management]\n\n"
+                "Order content."
+            ),
+        )
+        session.commit()
+
+    plan = process_plan_job(client, session_local, project_id)
+    section_titles = [section["title"] for section in plan["sections"]]
+    enterprise_structure = next(
+        section for section in plan["sections"] if section["title"] == "Enterprise Structure"
+    )
+
+    assert section_titles[3:5] == ["Introduction", "Enterprise Structure"]
+    assert enterprise_structure["source_content_ids"]
+    assert enterprise_structure["source_role_basis"] == "fdd"
+    assert enterprise_structure["confidence"] == "high"
 
 
 def test_generate_aud_plan_uses_ppt_slide_titles_without_fdd(
@@ -225,6 +360,7 @@ def test_generate_aud_plan_uses_ppt_slide_titles_without_fdd(
     section_titles = [section["title"] for section in plan["sections"]]
 
     assert plan["generation_basis"] == "ppt_slide_titles"
+    assert "Enterprise Structure" in section_titles
     assert "Fulfillment Flow" in section_titles
     assert "Shipping Confirmation" in section_titles
     assert "Welcome" not in section_titles
@@ -276,6 +412,7 @@ def test_generate_aud_plan_uses_generic_sections_for_transcript_only(
         "Document Version History",
         "Table of Contents",
         "Introduction",
+        "Enterprise Structure",
         "Purpose and Scope",
         "Process Overview",
         "Key Design Considerations",

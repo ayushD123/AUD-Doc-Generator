@@ -5,12 +5,13 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.base import new_uuid
 from app.db.session import get_db
 from app.models import Project, UploadedFile
 from app.schemas.uploaded_file import UploadedFileRead
 from app.services.file_storage import (
     ALLOWED_FILE_EXTENSIONS,
-    LocalFileStorageService,
+    StorageService,
     get_file_storage,
 )
 
@@ -62,7 +63,7 @@ def validate_file_extension(filename: str | None) -> str:
 def upload_project_file(
     project_id: str,
     db: Annotated[Session, Depends(get_db)],
-    storage_service: Annotated[LocalFileStorageService, Depends(get_file_storage)],
+    storage_service: Annotated[StorageService, Depends(get_file_storage)],
     file: UploadFile = File(...),
     source_role: str | None = Form(default=None),
 ) -> UploadedFile:
@@ -76,9 +77,15 @@ def upload_project_file(
 
     validate_file_extension(file.filename)
     normalized_source_role = validate_source_role(source_role)
-    storage_path, file_type = storage_service.save_project_upload(project_id, file)
+    uploaded_file_id = new_uuid()
+    storage_path, file_type = storage_service.save_project_upload(
+        project_id,
+        uploaded_file_id,
+        file,
+    )
 
     uploaded_file = UploadedFile(
+        id=uploaded_file_id,
         project_id=project.id,
         original_filename=file.filename or "uploaded_file",
         file_type=file_type,

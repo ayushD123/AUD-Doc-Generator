@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
-from app.services.file_storage import LocalFileStorageService, get_file_storage
+from app.services.file_storage import LocalStorageService, get_file_storage
 
 
 @pytest.fixture()
@@ -33,8 +33,8 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
         with testing_session_local() as session:
             yield session
 
-    def override_file_storage() -> LocalFileStorageService:
-        return LocalFileStorageService(storage_root)
+    def override_file_storage() -> LocalStorageService:
+        return LocalStorageService(storage_root)
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_file_storage] = override_file_storage

@@ -21,6 +21,7 @@ GENERIC_TRANSCRIPT_TITLES = [
     "Key Design Considerations",
 ]
 OPEN_POINTS_TITLE = "Open Points"
+ENTERPRISE_STRUCTURE_TITLE = "Enterprise Structure"
 STANDARD_TITLES = {*STANDARD_METADATA_TITLES, OPEN_POINTS_TITLE}
 LOW_VALUE_SLIDE_TITLES = {
     "agenda",
@@ -59,6 +60,52 @@ def normalize_title(title: str) -> str:
     return " ".join(title.strip().split()).lower()
 
 
+def title_tokens(title: str) -> set[str]:
+    stop_words = {
+        "a",
+        "an",
+        "and",
+        "for",
+        "in",
+        "of",
+        "on",
+        "the",
+        "to",
+        "with",
+    }
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", normalize_title(title))
+        if token not in stop_words
+    }
+
+
+def titles_resemble(left: str, right: str) -> bool:
+    left_normalized = normalize_title(left)
+    right_normalized = normalize_title(right)
+
+    if not left_normalized or not right_normalized:
+        return False
+
+    left_tokens = title_tokens(left_normalized)
+    right_tokens = title_tokens(right_normalized)
+
+    if left_normalized == right_normalized:
+        return True
+
+    if (
+        min(len(left_tokens), len(right_tokens)) >= 2
+        and (left_normalized in right_normalized or right_normalized in left_normalized)
+    ):
+        return True
+
+    if not left_tokens or not right_tokens:
+        return False
+
+    overlap = len(left_tokens & right_tokens)
+    return overlap / max(len(left_tokens), len(right_tokens)) >= 0.6
+
+
 def is_low_value_slide_title(title: str) -> bool:
     normalized_title = normalize_title(title)
 
@@ -87,6 +134,19 @@ def slide_has_meaningful_content(slide: dict[str, Any]) -> bool:
 
     image_count = slide.get("image_count")
     return isinstance(image_count, int) and image_count > 0
+
+
+def text_contains_enterprise_structure(value: str | None) -> bool:
+    if not value:
+        return False
+
+    return bool(
+        re.search(
+            r"(^|\n)\s*enterprise\s+structure\s*($|\n)",
+            value,
+            flags=re.IGNORECASE,
+        )
+    )
 
 
 def make_section_id(index: int, title: str) -> str:
@@ -121,7 +181,7 @@ def get_project_source_data(
         session.scalars(
             select(ExtractedContent)
             .where(ExtractedContent.project_id == project_id)
-            .order_by(ExtractedContent.created_at.asc())
+            .order_by(ExtractedContent.created_at.desc())
         ).all()
     )
     uploaded_file_by_id = {
@@ -269,6 +329,130 @@ def build_ppt_candidates(
     return candidates
 
 
+def build_enterprise_structure_candidate(
+    extracted_contents: list[ExtractedContent],
+    uploaded_file_by_id: dict[str, UploadedFile],
+) -> SectionCandidate:
+    fallback_candidate = SectionCandidate(
+        title=ENTERPRISE_STRUCTURE_TITLE,
+        source_role_basis="required_placeholder",
+        confidence="low",
+        notes=["Required carry-forward section. Content not found in provided sources."],
+    )
+
+    for preferred_role in ("fdd", "kt_ppt", "supporting_doc", "unknown"):
+        for extracted_content in extracted_contents:
+            json_content = parse_json_content(extracted_content)
+            source_role = get_source_role(
+                extracted_content,
+                uploaded_file_by_id,
+                json_content,
+            )
+            if source_role != preferred_role:
+                continue
+
+            if extracted_content_has_enterprise_structure(extracted_content, json_content):
+                return SectionCandidate(
+                    title=ENTERPRISE_STRUCTURE_TITLE,
+                    source_file_ids=[extracted_content.uploaded_file_id],
+                    source_content_ids=[extracted_content.id],
+                    source_role_basis=source_role,
+                    confidence="high" if source_role == "fdd" else "medium",
+                    notes=[
+                        "Required carry-forward section.",
+                        f"Derived from {source_role} source content.",
+                    ],
+                )
+
+    return fallback_candidate
+
+
+def extracted_content_has_enterprise_structure(
+    extracted_content: ExtractedContent,
+    json_content: dict[str, Any],
+) -> bool:
+    headings = json_content.get("headings")
+    if isinstance(headings, list):
+        for heading in headings:
+            if not isinstance(heading, dict):
+                continue
+
+            title = heading.get("text")
+            if isinstance(title, str) and titles_resemble(
+                title,
+                ENTERPRISE_STRUCTURE_TITLE,
+            ):
+                return True
+
+    slides = json_content.get("slides")
+    if isinstance(slides, list):
+        for slide in slides:
+            if not isinstance(slide, dict):
+                continue
+
+            title = slide.get("title")
+            if isinstance(title, str) and titles_resemble(
+                title,
+                ENTERPRISE_STRUCTURE_TITLE,
+            ):
+                return True
+
+            texts = slide.get("texts")
+            if isinstance(texts, list) and any(
+                text_contains_enterprise_structure(text)
+                for text in texts
+                if isinstance(text, str)
+            ):
+                return True
+
+    return text_contains_enterprise_structure(extracted_content.text_content)
+
+
+def insert_enterprise_structure_candidate(
+    content_candidates: list[SectionCandidate],
+    enterprise_candidate: SectionCandidate,
+) -> list[SectionCandidate]:
+    remaining_candidates: list[SectionCandidate] = []
+    selected_candidate = enterprise_candidate
+
+    for candidate in content_candidates:
+        if titles_resemble(candidate.title, ENTERPRISE_STRUCTURE_TITLE):
+            if candidate.source_content_ids:
+                selected_candidate = candidate
+            continue
+
+        remaining_candidates.append(candidate)
+
+    insert_index = 0
+    for index, candidate in enumerate(remaining_candidates):
+        if normalize_title(candidate.title) == "introduction":
+            insert_index = index + 1
+            break
+
+    return [
+        *remaining_candidates[:insert_index],
+        selected_candidate,
+        *remaining_candidates[insert_index:],
+    ]
+
+
+def merge_fdd_and_supporting_ppt_candidates(
+    fdd_candidates: list[SectionCandidate],
+    ppt_candidates: list[SectionCandidate],
+) -> list[SectionCandidate]:
+    merged = list(fdd_candidates)
+    fdd_titles = [candidate.title for candidate in fdd_candidates]
+    seen_titles = {normalize_title(candidate.title) for candidate in merged}
+
+    for ppt_candidate in ppt_candidates:
+        if any(titles_resemble(fdd_title, ppt_candidate.title) for fdd_title in fdd_titles):
+            continue
+
+        add_candidate(merged, seen_titles, ppt_candidate)
+
+    return merged
+
+
 def build_transcript_candidates(
     extracted_contents: list[ExtractedContent],
     uploaded_file_by_id: dict[str, UploadedFile],
@@ -371,8 +555,16 @@ def build_aud_plan_payload(session: Session, project_id: str) -> dict[str, Any]:
     )
 
     if has_fdd_extracted_content:
-        generation_basis = "fdd_headings"
-        content_candidates = fdd_candidates
+        ppt_candidates = build_ppt_candidates(extracted_contents, uploaded_file_by_id)
+        content_candidates = merge_fdd_and_supporting_ppt_candidates(
+            fdd_candidates,
+            ppt_candidates,
+        )
+        generation_basis = (
+            "fdd_headings_with_ppt_support"
+            if has_ppt_extracted_content
+            else "fdd_headings"
+        )
     elif has_ppt_extracted_content:
         ppt_candidates = build_ppt_candidates(extracted_contents, uploaded_file_by_id)
         generation_basis = "ppt_slide_titles"
@@ -390,6 +582,14 @@ def build_aud_plan_payload(session: Session, project_id: str) -> dict[str, Any]:
         content_candidates = transcript_candidates
 
     standard_sections = build_standard_sections(default_template_required)
+    enterprise_candidate = build_enterprise_structure_candidate(
+        extracted_contents,
+        uploaded_file_by_id,
+    )
+    content_candidates = insert_enterprise_structure_candidate(
+        content_candidates,
+        enterprise_candidate,
+    )
     sections = [
         *standard_sections[: len(STANDARD_METADATA_TITLES)],
         *content_candidates,

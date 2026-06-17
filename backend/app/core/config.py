@@ -7,7 +7,14 @@ class Settings(BaseSettings):
     APP_NAME: str = "aud-generator-api"
     ENVIRONMENT: str = "local"
     DATABASE_URL: str = "sqlite:///./aud_generator.db"
+    STORAGE_BACKEND: str = "local"
     LOCAL_STORAGE_ROOT: str = "storage"
+    OCI_BUCKET_NAME: str | None = None
+    OCI_NAMESPACE: str | None = None
+    OCI_REGION: str | None = None
+    OCI_COMPARTMENT_OCID: str | None = None
+    OCI_CONFIG_FILE: str | None = None
+    OCI_PROFILE: str | None = None
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",

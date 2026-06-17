@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based local DOCX draft generation, and pytest coverage. It does not include OCI integration, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include OCI Queue, speech transcription, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -77,38 +77,47 @@ uvicorn app.main:app --reload
 
 The same `DATABASE_URL` setting is the future switch point for Oracle Autonomous Database once that integration is introduced.
 
-## Local File Storage
+## File Storage
 
-Uploaded files are stored on the local filesystem for development:
+The backend uses a storage abstraction with two implementations:
+
+- `LocalStorageService`
+- `OCIObjectStorageService`
+
+Local filesystem storage is the default for development and tests:
 
 ```text
-backend/storage/projects/{project_id}/uploads/
+STORAGE_BACKEND=local
 ```
 
-The database stores a relative storage key such as:
+Uploaded files are stored with keys under:
 
 ```text
-projects/{project_id}/uploads/{generated_filename}.pdf
+projects/{project_id}/uploads/{file_id}_{filename}
 ```
 
-This keeps local storage behind a service class so it can later be replaced with OCI Object Storage without changing route behavior.
-
-Generated DOCX drafts are stored locally under:
+When `STORAGE_BACKEND=local`, those keys map under:
 
 ```text
-backend/storage/projects/{project_id}/outputs/
+backend/storage/
 ```
 
-The database stores a relative generated document storage path such as:
+Extracted PPT images use:
 
 ```text
-projects/{project_id}/outputs/{generated_filename}.docx
+projects/{project_id}/extracted_images/{uploaded_file_id}/{image_name}
 ```
 
-Default storage root:
+Generated DOCX drafts use:
 
 ```text
-storage
+projects/{project_id}/outputs/{filename}
+```
+
+Default local storage root:
+
+```text
+LOCAL_STORAGE_ROOT=storage
 ```
 
 To override it:
@@ -117,6 +126,44 @@ To override it:
 $env:LOCAL_STORAGE_ROOT = "storage"
 uvicorn app.main:app --reload
 ```
+
+### OCI Object Storage
+
+OCI Object Storage is optional. Local storage remains the default and tests do
+not require OCI credentials.
+
+Install requirements after pulling the OCI adapter changes:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Configure the OCI Python SDK config file first, typically at:
+
+```text
+%USERPROFILE%\.oci\config
+```
+
+Then set:
+
+```powershell
+$env:STORAGE_BACKEND = "oci"
+$env:OCI_BUCKET_NAME = "<bucket-name>"
+$env:OCI_NAMESPACE = "<object-storage-namespace>"
+$env:OCI_REGION = "us-ashburn-1"
+$env:OCI_CONFIG_FILE = "$env:USERPROFILE\.oci\config"
+$env:OCI_PROFILE = "DEFAULT"
+uvicorn app.main:app --reload
+```
+
+`OCI_COMPARTMENT_OCID` is available as optional configuration for future bucket
+management flows, but the current adapter expects the bucket to already exist.
+The app uses SDK config-file authentication first; instance principals and
+resource principals are not wired in this phase.
+
+The database stores storage keys, not OCI URLs. Upload, extraction image writes,
+DOCX output writes, and generated-document downloads go through the active
+storage implementation.
 
 Spreadsheet extraction reads only the first configured number of meaningful rows per visible sheet.
 
@@ -281,7 +328,7 @@ The worker picks pending local jobs and simulates processing:
 - `extract_all`: runs transcript, DOCX, PPTX, and spreadsheet extraction in one job.
 - `generate_aud_plan`: creates a deterministic draft AUD plan JSON from extracted content and source-priority rules.
 - `extract_open_points`: scans extracted content for unresolved questions and stores deduplicated open points.
-- `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, and unresolved open points.
+- `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, unresolved open points, and writes it through the configured storage backend.
 
 `extract_all` progress moves across extraction stages. If some files fail and at least one file succeeds, the job ends as `completed_with_warnings`. If all attempted files fail, the job ends as `failed`.
 
@@ -321,10 +368,10 @@ Current PPTX extraction scope:
 
 - Files are selected when `file_type` is `pptx` or the original filename ends in `.pptx`.
 - Slide titles, text-frame text, table rows, notes text when accessible, and image counts are extracted with `python-pptx`.
-- Images are copied to:
+- Images are written through the configured storage backend using keys under:
 
 ```text
-backend/storage/projects/{project_id}/extracted_images/{uploaded_file_id}/
+projects/{project_id}/extracted_images/{uploaded_file_id}/
 ```
 
 - No OCR is performed.
@@ -393,8 +440,10 @@ Current DOCX generation scope:
 
 - Uses the latest AUD plan and mapped extracted content only.
 - If the latest AUD plan is missing, contains only standard sections, or predates extracted FDD content, DOCX generation refreshes the deterministic AUD plan before rendering.
+- Enterprise Structure is a required carry-forward section. If detected in FDD, PPT, or other extracted source content, it is inserted after Introduction with source text, tables, and supported associated images. If not detected, a clear placeholder is inserted after Introduction.
 - Does not call an LLM.
 - Gives mapped FDD content priority over PPT content.
+- For projects with both FDD and PPT, AUD planning keeps FDD headings first and adds non-duplicate PPT sections as supporting material; FDD remains the golden source when titles overlap.
 - For PPT-only projects, AUD planning uses meaningful slide titles and skips low-value title/session/agenda slides.
 - For planned sections based on FDD headings, includes text under the matching heading until the next heading.
 - For planned sections based on PPT slide titles, includes text, table rows, and notes from the matching slide.
@@ -466,7 +515,7 @@ Expected results:
 - `json_content.slide_count` matches the number of slides.
 - `json_content.slides` includes slide numbers, titles, text, tables, notes when available, and per-slide image counts.
 - `json_content.image_paths` lists extracted image storage paths.
-- Extracted image files exist under `backend/storage/projects/{project_id}/extracted_images/{uploaded_file_id}/`.
+- With local storage, extracted image files exist under `backend/storage/projects/{project_id}/extracted_images/{uploaded_file_id}/`. With OCI storage, the same keys exist in the configured bucket.
 
 ## Manual Spreadsheet Extraction Test
 
@@ -559,7 +608,8 @@ Expected results:
 - The `generate_aud_plan` job reaches `completed` with `100` progress.
 - `GET /aud-plan` returns the latest draft plan row.
 - `plan_json.default_template_required` is `true` when no explicit template AUD is uploaded.
-- If FDD extracted headings exist, plan sections are based on those headings.
+- If FDD extracted headings exist, plan sections start from those headings.
+- If FDD and PPT extracted content both exist, non-duplicate PPT slide-title sections are added after FDD headings while overlapping topics remain FDD-led.
 - If no FDD exists but PPT extracted content exists, plan sections use meaningful slide titles and omit low-value slides such as Welcome, Agenda, and Thank You.
 - If only transcript content exists, plan sections use the generic default set.
 - `plan_json.sections` includes Cover Page, Document Version History, Table of Contents, and Open Points.
@@ -611,11 +661,11 @@ Expected results:
 
 - The `generate_docx` job reaches `completed` with `100` progress.
 - A generated document row is returned with `document_type` set to `aud_docx`.
-- The `.docx` file exists under `backend/storage/projects/{project_id}/outputs/`.
+- With local storage, the `.docx` file exists under `backend/storage/projects/{project_id}/outputs/`. With OCI storage, the same key exists in the configured bucket.
 - The document contains a title page, version history table, Purpose and Scope placeholder, planned section headings, supported rule-based section content or clear placeholders, unresolved open points table, and internal review note.
 - Matching PPT images appear below relevant planned sections with source slide captions when extracted image files exist locally.
 - If an earlier AUD plan was generated before extraction or before FDD content was available, the DOCX job refreshes the plan so extracted FDD/PPT sections can appear and FDD can win.
-- No LLM call, OCI storage, OCR, image interpretation, or template-perfect formatting is used.
+- No LLM call, OCI Queue, OCR, image interpretation, or template-perfect formatting is used.
 
 ## Run Tests
 

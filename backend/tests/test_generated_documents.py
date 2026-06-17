@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
-import app.api.routes_generated_documents as generated_document_routes
 import app.services.docx_generation as docx_generation
 from app.db.base import Base
 from app.db.session import get_db
@@ -22,6 +21,7 @@ from app.models import (
     OpenPoint,
     UploadedFile,
 )
+from app.services.file_storage import LocalStorageService, get_file_storage
 from app.workers.local_worker import process_generate_docx_job
 
 ONE_PIXEL_PNG = (
@@ -47,11 +47,10 @@ def client_session_and_storage(
     )
 
     Base.metadata.create_all(bind=engine)
-    monkeypatch.setattr(docx_generation, "get_local_storage_root", lambda: storage_root)
     monkeypatch.setattr(
-        generated_document_routes,
-        "get_local_storage_root",
-        lambda: storage_root,
+        docx_generation,
+        "get_file_storage",
+        lambda: LocalStorageService(storage_root),
     )
 
     app = create_app(create_tables_on_startup=False)
@@ -60,7 +59,11 @@ def client_session_and_storage(
         with testing_session_local() as session:
             yield session
 
+    def override_file_storage() -> LocalStorageService:
+        return LocalStorageService(storage_root)
+
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_file_storage] = override_file_storage
 
     with TestClient(app) as test_client:
         yield test_client, testing_session_local, storage_root
@@ -381,6 +384,199 @@ def test_fdd_content_has_priority_when_mapped_with_ppt(
     assert "PPT-only order capture content." not in document_text
 
 
+def test_docx_generation_includes_ppt_support_sections_with_fdd(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    image_storage_path = (
+        f"projects/{project_id}/extracted_images/ppt-file/slide_003_image_001.png"
+    )
+    image_path = storage_root / image_storage_path
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+
+    with session_local() as session:
+        fdd_file = UploadedFile(
+            project_id=project_id,
+            original_filename="order-management-fdd.docx",
+            file_type="docx",
+            storage_path=f"projects/{project_id}/uploads/order-management-fdd.docx",
+            source_role="fdd",
+        )
+        ppt_file = UploadedFile(
+            project_id=project_id,
+            original_filename="order-management-kt.pptx",
+            file_type="pptx",
+            storage_path=f"projects/{project_id}/uploads/order-management-kt.pptx",
+            source_role="kt_ppt",
+        )
+        session.add_all([fdd_file, ppt_file])
+        session.flush()
+
+        session.add(
+            ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=fdd_file.id,
+                content_type="docx",
+                title=fdd_file.original_filename,
+                text_content=(
+                    "[Heading: Order Capture]\n\n"
+                    "FDD order capture content is the golden section text."
+                ),
+                json_content=json.dumps(
+                    {
+                        "source_role": "fdd",
+                        "is_golden_source": True,
+                        "headings": [{"text": "Order Capture", "level": 1}],
+                    }
+                ),
+            )
+        )
+        session.add(
+            ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=ppt_file.id,
+                content_type="pptx",
+                title=ppt_file.original_filename,
+                text_content="Slide 3\nTitle: Pricing Assignments",
+                json_content=json.dumps(
+                    {
+                        "source_role": "kt_ppt",
+                        "slides": [
+                            {
+                                "slide_number": 3,
+                                "title": "Pricing Assignments",
+                                "texts": ["Pricing strategy assignment precedence."],
+                                "tables": [],
+                                "notes": None,
+                                "image_count": 1,
+                                "image_paths": [image_storage_path],
+                            }
+                        ],
+                        "image_paths": [image_storage_path],
+                        "total_image_count": 1,
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+    with session_local() as session:
+        job = Job(project_id=project_id, job_type="generate_docx")
+        session.add(job)
+        session.commit()
+        process_generate_docx_job(session, job, sleep_seconds=0)
+        generated_document = session.scalar(
+            select(GeneratedDocument).where(GeneratedDocument.project_id == project_id)
+        )
+        aud_plan = session.scalar(select(AUDPlan).where(AUDPlan.project_id == project_id))
+        assert generated_document is not None
+        assert aud_plan is not None
+        output_path = storage_root / generated_document.storage_path
+
+    plan_payload = json.loads(aud_plan.plan_json)
+    document = Document(output_path)
+    document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert plan_payload["generation_basis"] == "fdd_headings_with_ppt_support"
+    assert "FDD order capture content is the golden section text." in document_text
+    assert "Pricing Assignments" in document_text
+    assert "Pricing strategy assignment precedence." in document_text
+    assert "Source image from slide 3: Pricing Assignments" in document_text
+    assert len(document.inline_shapes) == 1
+
+
+def test_docx_generation_carries_enterprise_structure_content_and_image(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    image_storage_path = (
+        f"projects/{project_id}/extracted_images/fdd-file/image_001.png"
+    )
+    image_path = storage_root / image_storage_path
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+
+    with session_local() as session:
+        fdd_file = UploadedFile(
+            project_id=project_id,
+            original_filename="order-management-fdd.docx",
+            file_type="docx",
+            storage_path=f"projects/{project_id}/uploads/order-management-fdd.docx",
+            source_role="fdd",
+        )
+        session.add(fdd_file)
+        session.flush()
+        session.add(
+            ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=fdd_file.id,
+                content_type="docx",
+                title=fdd_file.original_filename,
+                text_content=(
+                    "[Heading: Introduction]\n\n"
+                    "Introductory content.\n\n"
+                    "[Heading: Enterprise Structure]\n\n"
+                    "Business Unit: IT_BLCM_EUR_BU\n\n"
+                    "[Table 1]\n"
+                    "Legal Entity | Biolchim S.p.A.\n\n"
+                    "[Image: "
+                    f"{image_storage_path}"
+                    "]\n\n"
+                    "[Heading: Order Management]\n\n"
+                    "Order content."
+                ),
+                json_content=json.dumps(
+                    {
+                        "source_role": "fdd",
+                        "is_golden_source": True,
+                        "headings": [
+                            {"text": "Introduction", "level": 1},
+                            {"text": "Enterprise Structure", "level": None},
+                            {"text": "Order Management", "level": 1},
+                        ],
+                        "images": [
+                            {
+                                "index": 1,
+                                "storage_path": image_storage_path,
+                                "section_title": "Enterprise Structure",
+                            }
+                        ],
+                        "image_paths": [image_storage_path],
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+    with session_local() as session:
+        job = Job(project_id=project_id, job_type="generate_docx")
+        session.add(job)
+        session.commit()
+        process_generate_docx_job(session, job, sleep_seconds=0)
+        generated_document = session.scalar(
+            select(GeneratedDocument).where(GeneratedDocument.project_id == project_id)
+        )
+        assert generated_document is not None
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    headings = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if paragraph.style.name.startswith("Heading")
+    ]
+
+    assert headings[2:4] == ["Introduction", "Enterprise Structure"]
+    assert "Business Unit: IT_BLCM_EUR_BU" in document_text
+    assert "Legal Entity | Biolchim S.p.A." in document_text
+    assert "Source image from DOCX section: Enterprise Structure" in document_text
+    assert len(document.inline_shapes) == 1
+
+
 def test_stale_standard_plan_is_refreshed_before_docx_generation(
     client_session_and_storage: tuple[TestClient, sessionmaker, Path],
 ) -> None:
@@ -594,6 +790,112 @@ def test_ppt_images_are_added_for_matching_section(
     assert "Source image from slide 1: Fulfillment Flow" in document_text
     assert "Source image from slide 3: Configuration Snapshot" in document_text
     assert "Source image from slide 2: Thank You" not in document_text
+
+
+def test_single_word_ppt_title_does_not_overmatch_compound_section(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    service_image_storage_path = (
+        f"projects/{project_id}/extracted_images/ppt-file/slide_001_image_001.png"
+    )
+    pricing_image_storage_path = (
+        f"projects/{project_id}/extracted_images/ppt-file/slide_002_image_001.png"
+    )
+    service_image_path = storage_root / service_image_storage_path
+    pricing_image_path = storage_root / pricing_image_storage_path
+    service_image_path.parent.mkdir(parents=True, exist_ok=True)
+    service_image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+    pricing_image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+
+    with session_local() as session:
+        ppt_file = UploadedFile(
+            project_id=project_id,
+            original_filename="order-flow.pptx",
+            file_type="pptx",
+            storage_path=f"projects/{project_id}/uploads/order-flow.pptx",
+            source_role="kt_ppt",
+        )
+        session.add(ppt_file)
+        session.flush()
+
+        ppt_content = ExtractedContent(
+            project_id=project_id,
+            uploaded_file_id=ppt_file.id,
+            content_type="pptx",
+            title=ppt_file.original_filename,
+            text_content="Slide 1\nTitle: Service Mappings (OM/Pricing)",
+            json_content=json.dumps(
+                {
+                    "source_role": "kt_ppt",
+                    "slides": [
+                        {
+                            "slide_number": 1,
+                            "title": "Service Mappings (OM/Pricing)",
+                            "texts": ["Service mapping details."],
+                            "tables": [],
+                            "notes": None,
+                            "image_count": 1,
+                            "image_paths": [service_image_storage_path],
+                        },
+                        {
+                            "slide_number": 2,
+                            "title": "Pricing",
+                            "texts": ["Pricing details."],
+                            "tables": [],
+                            "notes": None,
+                            "image_count": 1,
+                            "image_paths": [pricing_image_storage_path],
+                        },
+                    ],
+                    "image_paths": [
+                        service_image_storage_path,
+                        pricing_image_storage_path,
+                    ],
+                    "total_image_count": 2,
+                }
+            ),
+        )
+        session.add(ppt_content)
+        session.flush()
+        session.add(
+            AUDPlan(
+                project_id=project_id,
+                status="draft",
+                plan_json=json.dumps(
+                    {
+                        "sections": [
+                            {
+                                "title": "Service Mappings (OM/Pricing)",
+                                "include_in_aud": True,
+                                "source_role_basis": "kt_ppt",
+                                "source_content_ids": [ppt_content.id],
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+    with session_local() as session:
+        job = Job(project_id=project_id, job_type="generate_docx")
+        session.add(job)
+        session.commit()
+        process_generate_docx_job(session, job, sleep_seconds=0)
+        generated_document = session.scalar(
+            select(GeneratedDocument).where(GeneratedDocument.project_id == project_id)
+        )
+        assert generated_document is not None
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert len(document.inline_shapes) == 1
+    assert "Source image from slide 1: Service Mappings (OM/Pricing)" in document_text
+    assert "Source image from slide 2: Pricing" not in document_text
 
 
 def test_list_generated_documents_returns_404_for_unknown_project(

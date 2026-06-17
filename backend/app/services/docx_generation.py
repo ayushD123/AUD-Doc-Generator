@@ -4,6 +4,7 @@ import json
 import re
 from datetime import date
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from docx import Document
@@ -15,7 +16,11 @@ from sqlalchemy.orm import Session
 
 from app.db.base import utc_now
 from app.models import AUDPlan, ExtractedContent, GeneratedDocument, OpenPoint, Project
-from app.services.file_storage import get_local_storage_root
+from app.services.file_storage import (
+    LocalStorageService,
+    StorageService,
+    get_file_storage,
+)
 
 DOCUMENT_TYPE = "aud_docx"
 PLACEHOLDER_LINE = "<Content not available in provided source material>"
@@ -36,7 +41,10 @@ RESOLVED_OPEN_POINT_STATUSES = {
 }
 MAX_SECTION_PARAGRAPHS = 4
 MAX_SECTION_CHARACTERS = 1800
+MAX_ENTERPRISE_SECTION_PARAGRAPHS = 20
+MAX_ENTERPRISE_SECTION_CHARACTERS = 8000
 MAX_IMAGES_PER_SECTION = 3
+ENTERPRISE_STRUCTURE_TITLE = "Enterprise Structure"
 SUPPORTED_DOCX_IMAGE_EXTENSIONS = {
     ".bmp",
     ".gif",
@@ -90,20 +98,27 @@ def titles_resemble(left: str, right: str | None) -> bool:
     if not left_normalized or not right_normalized:
         return False
 
+    left_tokens = title_tokens(left_normalized)
+    right_tokens = title_tokens(right_normalized)
+
     if left_normalized == right_normalized:
         return True
 
-    if left_normalized in right_normalized or right_normalized in left_normalized:
+    if (
+        min(len(left_tokens), len(right_tokens)) >= 2
+        and (left_normalized in right_normalized or right_normalized in left_normalized)
+    ):
         return True
-
-    left_tokens = title_tokens(left_normalized)
-    right_tokens = title_tokens(right_normalized)
 
     if not left_tokens or not right_tokens:
         return False
 
     overlap = len(left_tokens & right_tokens)
     return overlap / max(len(left_tokens), len(right_tokens)) >= 0.6
+
+
+def is_enterprise_structure_title(value: str | None) -> bool:
+    return bool(value and titles_resemble(value, ENTERPRISE_STRUCTURE_TITLE))
 
 
 def sanitize_filename_part(value: str | None) -> str:
@@ -128,6 +143,13 @@ def parse_plan_json(aud_plan: AUDPlan | None) -> dict[str, Any]:
 
 def plan_has_content_sections(plan_payload: dict[str, Any]) -> bool:
     return bool(iter_planned_sections(plan_payload))
+
+
+def plan_has_enterprise_structure_section(plan_payload: dict[str, Any]) -> bool:
+    return any(
+        is_enterprise_structure_title(get_section_title(section))
+        for section in iter_planned_sections(plan_payload)
+    )
 
 
 def parse_extracted_json(extracted_content: ExtractedContent) -> dict[str, Any]:
@@ -216,14 +238,36 @@ def resolve_plan_payload(
     aud_plan = latest_aud_plan(session, project_id)
     plan_payload = parse_plan_json(aud_plan)
     generation_basis = plan_payload.get("generation_basis")
+    has_fdd_content = has_extracted_source_role(extracted_content_by_id, "fdd")
+    has_ppt_content = has_extracted_source_role(extracted_content_by_id, "kt_ppt")
+    needs_fdd_refresh = (
+        has_fdd_content
+        and isinstance(generation_basis, str)
+        and generation_basis not in {"fdd_headings", "fdd_headings_with_ppt_support"}
+    )
+    needs_ppt_support_refresh = (
+        has_fdd_content
+        and has_ppt_content
+        and generation_basis == "fdd_headings"
+    )
+    needs_enterprise_refresh = (
+        isinstance(generation_basis, str)
+        and generation_basis
+        in {
+            "fdd_headings",
+            "fdd_headings_with_ppt_support",
+            "ppt_slide_titles",
+            "transcript_generic_sections",
+            "standard_sections_only",
+        }
+        and not plan_has_enterprise_structure_section(plan_payload)
+    )
 
     if (
         plan_has_content_sections(plan_payload)
-        and not (
-            has_extracted_source_role(extracted_content_by_id, "fdd")
-            and isinstance(generation_basis, str)
-            and generation_basis != "fdd_headings"
-        )
+        and not needs_fdd_refresh
+        and not needs_ppt_support_refresh
+        and not needs_enterprise_refresh
     ):
         return plan_payload
 
@@ -350,6 +394,8 @@ def get_heading_title(block: str) -> str | None:
 def extract_fdd_heading_content(
     extracted_content: ExtractedContent,
     heading_title: str,
+    max_paragraphs: int = MAX_SECTION_PARAGRAPHS,
+    max_characters: int = MAX_SECTION_CHARACTERS,
 ) -> tuple[list[str], bool]:
     blocks = meaningful_paragraphs(extracted_content.text_content)
     collecting = False
@@ -369,7 +415,37 @@ def extract_fdd_heading_content(
         if collecting:
             paragraphs.append(block)
 
-    return truncate_paragraphs(paragraphs)
+    return truncate_paragraphs(paragraphs, max_paragraphs, max_characters)
+
+
+def extract_enterprise_structure_content(
+    extracted_content: ExtractedContent,
+) -> tuple[list[str], bool]:
+    blocks = meaningful_paragraphs(extracted_content.text_content)
+    collecting = False
+    paragraphs: list[str] = []
+
+    for block in blocks:
+        if is_heading_block(block):
+            current_heading = get_heading_title(block)
+            if collecting:
+                break
+
+            collecting = is_enterprise_structure_title(current_heading)
+            continue
+
+        if not collecting and is_enterprise_structure_title(block):
+            collecting = True
+            continue
+
+        if collecting:
+            paragraphs.append(block)
+
+    return truncate_paragraphs(
+        paragraphs,
+        MAX_ENTERPRISE_SECTION_PARAGRAPHS,
+        MAX_ENTERPRISE_SECTION_CHARACTERS,
+    )
 
 
 def render_slide_paragraphs(slide: dict[str, Any]) -> list[str]:
@@ -479,6 +555,8 @@ def has_meaningful_slide_text(slide: dict[str, Any]) -> bool:
 def extract_ppt_slide_content(
     extracted_content: ExtractedContent,
     slide_title: str,
+    max_paragraphs: int = MAX_SECTION_PARAGRAPHS,
+    max_characters: int = MAX_SECTION_CHARACTERS,
 ) -> tuple[list[str], bool]:
     json_content = parse_extracted_json(extracted_content)
     slides = json_content.get("slides")
@@ -498,7 +576,17 @@ def extract_ppt_slide_content(
         if normalize_title(title) == normalize_title(slide_title):
             paragraphs.extend(render_slide_paragraphs(slide))
 
-    return truncate_paragraphs(paragraphs)
+    return truncate_paragraphs(paragraphs, max_paragraphs, max_characters)
+
+
+def get_docx_extracted_contents(
+    extracted_content_by_id: dict[str, ExtractedContent],
+) -> list[ExtractedContent]:
+    return [
+        extracted_content
+        for extracted_content in extracted_content_by_id.values()
+        if extracted_content.content_type == "docx"
+    ]
 
 
 def collect_section_ppt_images(
@@ -562,29 +650,117 @@ def collect_section_ppt_images(
     return candidates
 
 
+def collect_section_docx_images(
+    section: dict[str, Any],
+    extracted_content_by_id: dict[str, ExtractedContent],
+) -> list[dict[str, Any]]:
+    section_title = get_section_title(section)
+    if not section_title:
+        return []
+
+    mapped_docx_content_ids = {
+        content.id
+        for content in get_mapped_extracted_contents(section, extracted_content_by_id)
+        if content.content_type == "docx"
+    }
+    include_all_docx_sources = is_enterprise_structure_title(section_title)
+    candidates: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    for extracted_content in get_docx_extracted_contents(extracted_content_by_id):
+        if (
+            not include_all_docx_sources
+            and extracted_content.id not in mapped_docx_content_ids
+        ):
+            continue
+
+        json_content = parse_extracted_json(extracted_content)
+        images = json_content.get("images")
+        if not isinstance(images, list):
+            continue
+
+        for image in images:
+            if not isinstance(image, dict):
+                continue
+
+            image_section_title = image.get("section_title")
+            if not (
+                isinstance(image_section_title, str)
+                and titles_resemble(section_title, image_section_title)
+            ):
+                continue
+
+            storage_path = image.get("storage_path")
+            if not isinstance(storage_path, str):
+                continue
+
+            if not is_supported_docx_image_path(storage_path):
+                continue
+
+            if storage_path in seen_paths:
+                continue
+
+            seen_paths.add(storage_path)
+            candidates.append(
+                {
+                    "storage_path": storage_path,
+                    "slide_number": None,
+                    "slide_title": image_section_title,
+                    "caption": f"Source image from DOCX section: {image_section_title}",
+                }
+            )
+
+    return candidates
+
+
+def collect_section_images(
+    section: dict[str, Any],
+    extracted_content_by_id: dict[str, ExtractedContent],
+) -> list[dict[str, Any]]:
+    images = [
+        *collect_section_docx_images(section, extracted_content_by_id),
+        *collect_section_ppt_images(section, extracted_content_by_id),
+    ]
+
+    if is_enterprise_structure_title(get_section_title(section)):
+        return images
+
+    return images[:MAX_IMAGES_PER_SECTION]
+
+
 def is_supported_docx_image_path(storage_path: str) -> bool:
     return Path(storage_path).suffix.lower() in SUPPORTED_DOCX_IMAGE_EXTENSIONS
 
 
-def resolve_local_storage_path(storage_root: Path, storage_path: str) -> Path | None:
-    candidate_path = storage_root / storage_path
+def resolve_storage_service(
+    storage_root: Path | None = None,
+    storage_service: StorageService | None = None,
+) -> StorageService:
+    if storage_service is not None:
+        return storage_service
 
+    if storage_root is not None:
+        return LocalStorageService(storage_root)
+
+    return get_file_storage()
+
+
+def materialize_image_path(
+    storage_service: StorageService,
+    storage_path: str,
+    temporary_dir: Path,
+) -> Path | None:
+    local_path = storage_service.local_path(storage_path)
+    if local_path is not None:
+        return local_path
+
+    destination = temporary_dir / Path(storage_path).name
     try:
-        resolved_storage_root = storage_root.resolve()
-        resolved_candidate_path = candidate_path.resolve()
-    except OSError:
+        storage_service.download_to_path(storage_path, destination)
+    except Exception:
         return None
 
-    if (
-        resolved_candidate_path != resolved_storage_root
-        and resolved_storage_root not in resolved_candidate_path.parents
-    ):
-        return None
-
-    if not resolved_candidate_path.is_file():
-        return None
-
-    return resolved_candidate_path
+    return destination if destination.is_file() else None
 
 
 def get_usable_page_width(document: Document) -> Emu:
@@ -595,7 +771,8 @@ def get_usable_page_width(document: Document) -> Emu:
 def add_section_images(
     document: Document,
     images: list[dict[str, Any]],
-    storage_root: Path,
+    storage_service: StorageService,
+    temporary_dir: Path,
 ) -> None:
     if not images:
         return
@@ -607,7 +784,11 @@ def add_section_images(
         if not isinstance(storage_path, str):
             continue
 
-        image_path = resolve_local_storage_path(storage_root, storage_path)
+        image_path = materialize_image_path(
+            storage_service,
+            storage_path,
+            temporary_dir,
+        )
         if image_path is None:
             continue
 
@@ -618,11 +799,15 @@ def add_section_images(
 
         slide_number = image.get("slide_number")
         slide_title = image.get("slide_title")
-        caption = (
-            f"Source image from slide {slide_number}: {slide_title}"
-            if isinstance(slide_number, int)
-            else f"Source image from slide: {slide_title}"
-        )
+        custom_caption = image.get("caption")
+        if isinstance(custom_caption, str):
+            caption = custom_caption
+        else:
+            caption = (
+                f"Source image from slide {slide_number}: {slide_title}"
+                if isinstance(slide_number, int)
+                else f"Source image from slide: {slide_title}"
+            )
         caption_paragraph = document.add_paragraph(caption)
         caption_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
@@ -643,11 +828,28 @@ def build_section_content(
         if get_extracted_source_role(content) == "fdd"
     ]
     source_role_basis = get_section_source_role_basis(section)
+    is_enterprise_section = is_enterprise_structure_title(section_title)
+
+    if is_enterprise_section:
+        enterprise_contents = mapped_contents or list(extracted_content_by_id.values())
+        for extracted_content in enterprise_contents:
+            if extracted_content.content_type == "docx":
+                paragraphs, was_truncated = extract_enterprise_structure_content(
+                    extracted_content
+                )
+                if paragraphs:
+                    return paragraphs, was_truncated
 
     for extracted_content in fdd_contents:
         paragraphs, was_truncated = extract_fdd_heading_content(
             extracted_content,
             section_title,
+            MAX_ENTERPRISE_SECTION_PARAGRAPHS
+            if is_enterprise_section
+            else MAX_SECTION_PARAGRAPHS,
+            MAX_ENTERPRISE_SECTION_CHARACTERS
+            if is_enterprise_section
+            else MAX_SECTION_CHARACTERS,
         )
         if paragraphs:
             return paragraphs, was_truncated
@@ -663,6 +865,12 @@ def build_section_content(
             paragraphs, was_truncated = extract_ppt_slide_content(
                 extracted_content,
                 section_title,
+                MAX_ENTERPRISE_SECTION_PARAGRAPHS
+                if is_enterprise_section
+                else MAX_SECTION_PARAGRAPHS,
+                MAX_ENTERPRISE_SECTION_CHARACTERS
+                if is_enterprise_section
+                else MAX_SECTION_CHARACTERS,
             )
             if paragraphs:
                 return paragraphs, was_truncated
@@ -699,7 +907,33 @@ def iter_planned_sections(plan_payload: dict[str, Any]) -> list[dict[str, Any]]:
         seen_titles.add(normalized_title)
         planned_sections.append(section)
 
-    return planned_sections
+    if not planned_sections:
+        return planned_sections
+
+    if any(
+        is_enterprise_structure_title(get_section_title(section))
+        for section in planned_sections
+    ):
+        return planned_sections
+
+    enterprise_section = {
+        "title": ENTERPRISE_STRUCTURE_TITLE,
+        "include_in_aud": True,
+        "source_role_basis": "required_placeholder",
+        "source_content_ids": [],
+        "notes": ["Required carry-forward section."],
+    }
+    insert_index = 0
+    for index, section in enumerate(planned_sections):
+        if normalize_title(section["title"]) == "introduction":
+            insert_index = index + 1
+            break
+
+    return [
+        *planned_sections[:insert_index],
+        enterprise_section,
+        *planned_sections[insert_index:],
+    ]
 
 
 def add_key_value_paragraph(document: Document, label: str, value: str | None) -> None:
@@ -758,7 +992,8 @@ def build_document(
     plan_payload: dict[str, Any],
     extracted_content_by_id: dict[str, ExtractedContent],
     open_points: list[OpenPoint],
-    storage_root: Path,
+    storage_service: StorageService,
+    temporary_dir: Path,
 ) -> Document:
     document = Document()
     current_date = utc_now().date()
@@ -801,8 +1036,9 @@ def build_document(
 
         add_section_images(
             document,
-            collect_section_ppt_images(section, extracted_content_by_id),
-            storage_root,
+            collect_section_images(section, extracted_content_by_id),
+            storage_service,
+            temporary_dir,
         )
 
     add_open_points_table(document, open_points)
@@ -814,13 +1050,14 @@ def generate_docx(
     session: Session,
     project_id: str,
     storage_root: Path | None = None,
+    storage_service: StorageService | None = None,
 ) -> GeneratedDocument:
     project = session.get(Project, project_id)
 
     if project is None:
         raise ValueError("Project not found.")
 
-    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_storage_service = resolve_storage_service(storage_root, storage_service)
     extracted_content_by_id = get_extracted_content_by_id(session, project_id)
     plan_payload = resolve_plan_payload(
         session,
@@ -828,23 +1065,26 @@ def generate_docx(
         extracted_content_by_id,
     )
     open_points = list_open_points(session, project_id)
-    document = build_document(
-        project=project,
-        plan_payload=plan_payload,
-        extracted_content_by_id=extracted_content_by_id,
-        open_points=open_points,
-        storage_root=resolved_storage_root,
-    )
-
     timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
     filename_prefix = sanitize_filename_part(
         project.module_name or project.customer_name
     )
     filename = f"{filename_prefix}-aud-v1-{timestamp}.docx"
     storage_path = f"projects/{project_id}/outputs/{filename}"
-    output_path = resolved_storage_root / storage_path
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    document.save(output_path)
+
+    with TemporaryDirectory() as temporary_dir:
+        temporary_root = Path(temporary_dir)
+        document = build_document(
+            project=project,
+            plan_payload=plan_payload,
+            extracted_content_by_id=extracted_content_by_id,
+            open_points=open_points,
+            storage_service=resolved_storage_service,
+            temporary_dir=temporary_root,
+        )
+        output_path = temporary_root / filename
+        document.save(output_path)
+        resolved_storage_service.write_file(storage_path, output_path)
 
     generated_document = GeneratedDocument(
         project_id=project_id,

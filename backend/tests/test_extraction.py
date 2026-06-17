@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from docx import Document
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -13,7 +14,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
 from app.models import Job
-from app.services.file_storage import LocalFileStorageService, get_file_storage
+from app.services.file_storage import LocalStorageService, get_file_storage
 from app.services.pptx_extraction import extract_pptx
 from app.workers.local_worker import (
     process_extract_all_job,
@@ -21,6 +22,11 @@ from app.workers.local_worker import (
     process_extract_pptx_job,
     process_extract_spreadsheets_job,
     process_extract_transcripts_job,
+)
+
+ONE_PIXEL_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
+    "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 )
 
 
@@ -47,8 +53,8 @@ def client_and_session(
         with testing_session_local() as session:
             yield session
 
-    def override_file_storage() -> LocalFileStorageService:
-        return LocalFileStorageService(storage_root)
+    def override_file_storage() -> LocalStorageService:
+        return LocalStorageService(storage_root)
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_file_storage] = override_file_storage
@@ -197,6 +203,7 @@ def test_extract_docx_from_uploaded_fdd(
         "paragraph_count": 2,
         "table_count": 1,
         "heading_count": 1,
+        "image_count": 0,
         "comment_count": 0,
     }
     assert json_content["headings"] == [
@@ -213,6 +220,46 @@ def test_extract_docx_from_uploaded_fdd(
             "rows": [["Field", "Value"], ["Source", "FDD"]],
         }
     ]
+
+
+def test_extract_docx_carries_enterprise_structure_heading_and_image(
+    tmp_path: Path,
+) -> None:
+    document = Document()
+    document.add_heading("Introduction", level=1)
+    document.add_paragraph("Introductory content.")
+    document.add_paragraph("Enterprise Structure")
+    document.add_paragraph("Business Unit: IT_BLCM_EUR_BU")
+
+    image_path = tmp_path / "enterprise.png"
+    image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+    document.add_picture(str(image_path))
+
+    document.add_heading("Order Management", level=1)
+    document.add_paragraph("Next section.")
+
+    docx_path = tmp_path / "enterprise.docx"
+    image_output_dir = tmp_path / "images"
+    document.save(docx_path)
+
+    from app.services.docx_extraction import extract_docx
+
+    extracted = extract_docx(
+        docx_path,
+        image_output_dir=image_output_dir,
+        image_storage_prefix="projects/test/extracted_images/file-id",
+    )
+    json_content = extracted["json_content"]
+
+    assert "[Heading: Enterprise Structure]" in extracted["text_content"]
+    assert "Business Unit: IT_BLCM_EUR_BU" in extracted["text_content"]
+    assert json_content["headings"][1]["text"] == "Enterprise Structure"
+    assert json_content["metadata"]["image_count"] == 1
+    assert json_content["image_paths"] == [
+        "projects/test/extracted_images/file-id/image_001.png"
+    ]
+    assert json_content["images"][0]["section_title"] == "Enterprise Structure"
+    assert (image_output_dir / "image_001.png").exists()
 
 
 def create_pptx_fixture(tmp_path: Path) -> bytes:

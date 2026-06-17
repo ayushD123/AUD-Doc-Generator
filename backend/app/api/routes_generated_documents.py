@@ -1,15 +1,15 @@
-from pathlib import Path
 from typing import Annotated
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import GeneratedDocument, Project
 from app.schemas.generated_document import GeneratedDocumentRead
-from app.services.file_storage import get_local_storage_root
+from app.services.file_storage import StorageService, get_file_storage
 
 router = APIRouter(
     prefix="/projects/{project_id}/generated-documents",
@@ -49,7 +49,8 @@ def download_generated_document(
     project_id: str,
     document_id: str,
     db: Annotated[Session, Depends(get_db)],
-) -> FileResponse:
+    storage_service: Annotated[StorageService, Depends(get_file_storage)],
+) -> Response:
     get_project_or_404(project_id, db)
     generated_document = db.get(GeneratedDocument, document_id)
 
@@ -63,28 +64,21 @@ def download_generated_document(
             detail="Generated document not found.",
         )
 
-    storage_root = get_local_storage_root()
-    file_path = storage_root / generated_document.storage_path
-    resolved_storage_root = storage_root.resolve()
-    resolved_file_path = file_path.resolve()
-
-    if (
-        resolved_storage_root not in resolved_file_path.parents
-        and resolved_file_path != resolved_storage_root
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Generated document not found.",
-        )
-
-    if not file_path.exists() or not file_path.is_file():
+    if not storage_service.exists(generated_document.storage_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Generated document file not found.",
         )
 
-    return FileResponse(
-        path=Path(file_path),
+    content = storage_service.read_bytes(generated_document.storage_path)
+    filename = generated_document.filename
+    return Response(
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        filename=generated_document.filename,
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"{filename}\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        },
     )

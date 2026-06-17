@@ -1,6 +1,7 @@
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import sleep
 from traceback import format_exception_only
 
@@ -10,7 +11,11 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal, create_db_and_tables
 from app.models import ExtractedContent, Job, UploadedFile
-from app.services.file_storage import get_local_storage_root
+from app.services.file_storage import (
+    LocalStorageService,
+    StorageService,
+    get_file_storage,
+)
 
 FILE_TYPE_BY_EXTENSION = {
     ".docx": "docx",
@@ -64,6 +69,34 @@ def raise_or_record_extraction_error(
     result.record_error(uploaded_file, error)
 
 
+def resolve_storage_service(
+    storage_root: Path | None = None,
+    storage_service: StorageService | None = None,
+) -> StorageService:
+    if storage_service is not None:
+        return storage_service
+
+    if storage_root is not None:
+        return LocalStorageService(storage_root)
+
+    return get_file_storage()
+
+
+def materialize_storage_file(
+    storage_service: StorageService,
+    storage_key: str,
+    work_dir: Path,
+    filename: str,
+) -> Path:
+    local_path = storage_service.local_path(storage_key)
+    if local_path is not None:
+        return local_path
+
+    destination = work_dir / filename
+    storage_service.download_to_path(storage_key, destination)
+    return destination
+
+
 def process_classify_files_job(
     session: Session,
     job: Job,
@@ -96,16 +129,21 @@ def should_extract_transcript(uploaded_file: UploadedFile) -> bool:
     return uploaded_file.file_type == "transcript_text" or extension == ".txt"
 
 
-def read_uploaded_text_file(storage_root: Path, uploaded_file: UploadedFile) -> str:
-    file_path = storage_root / uploaded_file.storage_path
-    return file_path.read_text(encoding="utf-8", errors="replace")
+def read_uploaded_text_file(
+    storage_service: StorageService,
+    uploaded_file: UploadedFile,
+) -> str:
+    return storage_service.read_bytes(uploaded_file.storage_path).decode(
+        "utf-8",
+        errors="replace",
+    )
 
 
 def extract_transcripts_for_project(
     session: Session,
     project_id: str,
     uploaded_files: list[UploadedFile],
-    storage_root: Path,
+    storage_service: StorageService,
     continue_on_error: bool = False,
 ) -> ExtractionResult:
     result = ExtractionResult()
@@ -117,7 +155,7 @@ def extract_transcripts_for_project(
 
     for uploaded_file in transcript_files:
         try:
-            text_content = read_uploaded_text_file(storage_root, uploaded_file)
+            text_content = read_uploaded_text_file(storage_service, uploaded_file)
             extracted_content = ExtractedContent(
                 project_id=project_id,
                 uploaded_file_id=uploaded_file.id,
@@ -157,12 +195,12 @@ def process_extract_transcripts_job(
 
     sleep(sleep_seconds)
 
-    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_storage_service = resolve_storage_service(storage_root)
     result = extract_transcripts_for_project(
         session=session,
         project_id=job.project_id,
         uploaded_files=list_project_uploaded_files(session, job.project_id),
-        storage_root=resolved_storage_root,
+        storage_service=resolved_storage_service,
     )
 
     sleep(sleep_seconds)
@@ -182,7 +220,7 @@ def extract_docx_for_project(
     session: Session,
     project_id: str,
     uploaded_files: list[UploadedFile],
-    storage_root: Path,
+    storage_service: StorageService,
     continue_on_error: bool = False,
 ) -> ExtractionResult:
     result = ExtractionResult()
@@ -196,8 +234,30 @@ def extract_docx_for_project(
         try:
             from app.services.docx_extraction import extract_docx
 
-            file_path = storage_root / uploaded_file.storage_path
-            extracted_docx = extract_docx(file_path)
+            with TemporaryDirectory() as temporary_dir:
+                work_dir = Path(temporary_dir)
+                file_path = materialize_storage_file(
+                    storage_service,
+                    uploaded_file.storage_path,
+                    work_dir,
+                    uploaded_file.original_filename,
+                )
+                image_storage_prefix = (
+                    f"projects/{project_id}/extracted_images/{uploaded_file.id}"
+                )
+                image_output_dir = work_dir / "extracted_images"
+                extracted_docx = extract_docx(
+                    file_path,
+                    image_output_dir=image_output_dir,
+                    image_storage_prefix=image_storage_prefix,
+                )
+                for image_storage_path in extracted_docx["json_content"].get(
+                    "image_paths",
+                    [],
+                ):
+                    image_path = image_output_dir / Path(image_storage_path).name
+                    storage_service.write_file(image_storage_path, image_path)
+
             json_content = extracted_docx["json_content"]
             json_content["source_role"] = uploaded_file.source_role
 
@@ -238,12 +298,12 @@ def process_extract_docx_job(
 
     sleep(sleep_seconds)
 
-    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_storage_service = resolve_storage_service(storage_root)
     result = extract_docx_for_project(
         session=session,
         project_id=job.project_id,
         uploaded_files=list_project_uploaded_files(session, job.project_id),
-        storage_root=resolved_storage_root,
+        storage_service=resolved_storage_service,
     )
 
     sleep(sleep_seconds)
@@ -263,7 +323,7 @@ def extract_pptx_for_project(
     session: Session,
     project_id: str,
     uploaded_files: list[UploadedFile],
-    storage_root: Path,
+    storage_service: StorageService,
     continue_on_error: bool = False,
 ) -> ExtractionResult:
     result = ExtractionResult()
@@ -280,11 +340,27 @@ def extract_pptx_for_project(
             image_storage_prefix = (
                 f"projects/{project_id}/extracted_images/{uploaded_file.id}"
             )
-            extracted_pptx = extract_pptx(
-                file_path=storage_root / uploaded_file.storage_path,
-                image_output_dir=storage_root / image_storage_prefix,
-                image_storage_prefix=image_storage_prefix,
-            )
+            with TemporaryDirectory() as temporary_dir:
+                work_dir = Path(temporary_dir)
+                file_path = materialize_storage_file(
+                    storage_service,
+                    uploaded_file.storage_path,
+                    work_dir,
+                    uploaded_file.original_filename,
+                )
+                image_output_dir = work_dir / "extracted_images"
+                extracted_pptx = extract_pptx(
+                    file_path=file_path,
+                    image_output_dir=image_output_dir,
+                    image_storage_prefix=image_storage_prefix,
+                )
+                for image_storage_path in extracted_pptx["json_content"].get(
+                    "image_paths",
+                    [],
+                ):
+                    image_path = image_output_dir / Path(image_storage_path).name
+                    storage_service.write_file(image_storage_path, image_path)
+
             json_content = extracted_pptx["json_content"]
             json_content["source_role"] = uploaded_file.source_role
 
@@ -322,12 +398,12 @@ def process_extract_pptx_job(
 
     sleep(sleep_seconds)
 
-    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_storage_service = resolve_storage_service(storage_root)
     result = extract_pptx_for_project(
         session=session,
         project_id=job.project_id,
         uploaded_files=list_project_uploaded_files(session, job.project_id),
-        storage_root=resolved_storage_root,
+        storage_service=resolved_storage_service,
     )
 
     sleep(sleep_seconds)
@@ -347,7 +423,7 @@ def extract_spreadsheets_for_project(
     session: Session,
     project_id: str,
     uploaded_files: list[UploadedFile],
-    storage_root: Path,
+    storage_service: StorageService,
     max_rows_per_sheet: int,
     continue_on_error: bool = False,
 ) -> ExtractionResult:
@@ -362,10 +438,18 @@ def extract_spreadsheets_for_project(
         try:
             from app.services.spreadsheet_extraction import extract_spreadsheet
 
-            extracted_spreadsheet = extract_spreadsheet(
-                file_path=storage_root / uploaded_file.storage_path,
-                max_rows_per_sheet=max_rows_per_sheet,
-            )
+            with TemporaryDirectory() as temporary_dir:
+                file_path = materialize_storage_file(
+                    storage_service,
+                    uploaded_file.storage_path,
+                    Path(temporary_dir),
+                    uploaded_file.original_filename,
+                )
+                extracted_spreadsheet = extract_spreadsheet(
+                    file_path=file_path,
+                    max_rows_per_sheet=max_rows_per_sheet,
+                )
+
             json_content = extracted_spreadsheet["json_content"]
             json_content["source_role"] = uploaded_file.source_role
 
@@ -404,7 +488,7 @@ def process_extract_spreadsheets_job(
 
     sleep(sleep_seconds)
 
-    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_storage_service = resolve_storage_service(storage_root)
     resolved_max_rows = (
         max_rows_per_sheet or get_settings().MAX_SPREADSHEET_ROWS_PER_SHEET
     )
@@ -412,7 +496,7 @@ def process_extract_spreadsheets_job(
         session=session,
         project_id=job.project_id,
         uploaded_files=list_project_uploaded_files(session, job.project_id),
-        storage_root=resolved_storage_root,
+        storage_service=resolved_storage_service,
         max_rows_per_sheet=resolved_max_rows,
     )
 
@@ -464,7 +548,7 @@ def process_extract_all_job(
 
     sleep(sleep_seconds)
 
-    resolved_storage_root = storage_root or get_local_storage_root()
+    resolved_storage_service = resolve_storage_service(storage_root)
     resolved_max_rows = (
         max_rows_per_sheet or get_settings().MAX_SPREADSHEET_ROWS_PER_SHEET
     )
@@ -479,7 +563,7 @@ def process_extract_all_job(
                 session=session,
                 project_id=job.project_id,
                 uploaded_files=uploaded_files,
-                storage_root=resolved_storage_root,
+                storage_service=resolved_storage_service,
                 continue_on_error=True,
             ),
         ),
@@ -490,7 +574,7 @@ def process_extract_all_job(
                 session=session,
                 project_id=job.project_id,
                 uploaded_files=uploaded_files,
-                storage_root=resolved_storage_root,
+                storage_service=resolved_storage_service,
                 continue_on_error=True,
             ),
         ),
@@ -501,7 +585,7 @@ def process_extract_all_job(
                 session=session,
                 project_id=job.project_id,
                 uploaded_files=uploaded_files,
-                storage_root=resolved_storage_root,
+                storage_service=resolved_storage_service,
                 continue_on_error=True,
             ),
         ),
@@ -512,7 +596,7 @@ def process_extract_all_job(
                 session=session,
                 project_id=job.project_id,
                 uploaded_files=uploaded_files,
-                storage_root=resolved_storage_root,
+                storage_service=resolved_storage_service,
                 max_rows_per_sheet=resolved_max_rows,
                 continue_on_error=True,
             ),

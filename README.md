@@ -6,9 +6,9 @@ This repository will evolve into a tool that helps generate Application Understa
 
 ## Current Phase
 
-The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace, local uploads, deterministic extraction, source priority reporting, AUD planning, open point extraction, and rule-based local editable DOCX draft output with frontend download controls.
+The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace, local uploads, an optional OCI Object Storage adapter, deterministic extraction, source priority reporting, AUD planning, open point extraction, and rule-based editable DOCX draft output with frontend download controls.
 
-It intentionally does not include Docker configuration, authentication, Redis, OCI integrations, or LLM calls.
+It intentionally does not include Docker configuration, authentication, Redis, OCI Queue workers, speech transcription, or LLM calls.
 
 ## Source Priority
 
@@ -19,7 +19,7 @@ When document generation behavior is implemented later, the FDD should be treate
 - Frontend: Next.js with TypeScript
 - Backend: FastAPI with Python
 - Database: local SQLite through SQLAlchemy, designed for a later move to Oracle Autonomous Database
-- File storage: local filesystem, designed for a later move to OCI Object Storage
+- File storage: local filesystem by default, with an optional OCI Object Storage adapter
 - Async jobs: simple database-backed job status, designed for a later move to OCI Queue workers
 
 ## Local Development Goals
