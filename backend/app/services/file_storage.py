@@ -16,6 +16,7 @@ ALLOWED_FILE_EXTENSIONS = {
     ".xlsm",
     ".txt",
     ".pdf",
+    ".mp3",
     ".m4a",
     ".mp4",
 }

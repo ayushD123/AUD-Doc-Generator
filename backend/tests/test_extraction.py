@@ -15,6 +15,7 @@ from app.db.session import get_db
 from app.main import create_app
 from app.models import Job
 from app.services.file_storage import LocalStorageService, get_file_storage
+from app.services.job_queue import LocalJobQueueService, get_job_queue_service
 from app.services.pptx_extraction import extract_pptx
 from app.workers.local_worker import (
     process_extract_all_job,
@@ -58,6 +59,7 @@ def client_and_session(
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_file_storage] = override_file_storage
+    app.dependency_overrides[get_job_queue_service] = LocalJobQueueService
 
     with TestClient(app) as test_client:
         test_client.storage_root = storage_root

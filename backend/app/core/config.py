@@ -18,6 +18,13 @@ class Settings(BaseSettings):
     OCI_PROFILE: str | None = None
     OCI_QUEUE_OCID: str | None = None
     OCI_QUEUE_ENDPOINT: str | None = None
+    OCI_SPEECH_COMPARTMENT_OCID: str | None = None
+    OCI_SPEECH_OUTPUT_BUCKET: str | None = None
+    OCI_SPEECH_OUTPUT_PREFIX: str = "projects/{project_id}/speech/"
+    OCI_SPEECH_MODEL_TYPE: str = "WHISPER_MEDIUM"
+    OCI_SPEECH_LANGUAGE_CODE: str = "en"
+    OCI_SPEECH_TIMEOUT_SECONDS: int = 1800
+    OCI_SPEECH_POLL_INTERVAL_SECONDS: float = 10.0
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",

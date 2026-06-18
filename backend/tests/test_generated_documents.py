@@ -22,6 +22,7 @@ from app.models import (
     UploadedFile,
 )
 from app.services.file_storage import LocalStorageService, get_file_storage
+from app.services.job_queue import LocalJobQueueService, get_job_queue_service
 from app.workers.local_worker import process_generate_docx_job
 
 ONE_PIXEL_PNG = (
@@ -64,6 +65,7 @@ def client_session_and_storage(
 
     app.dependency_overrides[get_db] = override_get_db
     app.dependency_overrides[get_file_storage] = override_file_storage
+    app.dependency_overrides[get_job_queue_service] = LocalJobQueueService
 
     with TestClient(app) as test_client:
         yield test_client, testing_session_local, storage_root

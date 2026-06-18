@@ -11,6 +11,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
 from app.models import ExtractedContent, Job, UploadedFile
+from app.services.job_queue import LocalJobQueueService, get_job_queue_service
 from app.workers.local_worker import process_extract_open_points_job
 
 
@@ -37,6 +38,7 @@ def client_and_session(
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_job_queue_service] = LocalJobQueueService
 
     with TestClient(app) as test_client:
         yield test_client, testing_session_local

@@ -23,6 +23,7 @@ FILE_TYPE_BY_EXTENSION = {
     ".xlsx": "spreadsheet",
     ".xlsm": "spreadsheet",
     ".txt": "transcript_text",
+    ".mp3": "media",
     ".m4a": "media",
     ".mp4": "media",
     ".pdf": "pdf",
@@ -208,6 +209,125 @@ def process_extract_transcripts_job(
     job.status = "completed"
     job.progress = 100
     job.message = f"Extracted {result.success_count} transcript file(s)."
+    session.commit()
+
+
+def transcribe_media_for_project(
+    session: Session,
+    project_id: str,
+    job: Job,
+    speech_service: object | None = None,
+) -> ExtractionResult:
+    from app.services.speech_transcription import (
+        OCISpeechTranscriptionService,
+        format_speech_output_prefix,
+        is_media_upload,
+    )
+
+    settings = get_settings()
+    if settings.STORAGE_BACKEND.strip().lower() != "oci":
+        raise ValueError(
+            "OCI Speech transcription requires STORAGE_BACKEND=oci because "
+            "media input must be available in Object Storage."
+        )
+
+    resolved_speech_service = speech_service or OCISpeechTranscriptionService(settings)
+    result = ExtractionResult()
+    media_files = [
+        uploaded_file
+        for uploaded_file in list_project_uploaded_files(session, project_id)
+        if is_media_upload(uploaded_file)
+    ]
+
+    if not media_files:
+        return result
+
+    speech_job_summaries: list[str] = []
+    for uploaded_file in media_files:
+        output_prefix = format_speech_output_prefix(
+            settings.OCI_SPEECH_OUTPUT_PREFIX,
+            project_id,
+            job.id,
+            uploaded_file.id,
+        )
+        speech_job_id = resolved_speech_service.submit_transcription_job(
+            uploaded_file,
+            output_prefix,
+        )
+        speech_job_summaries.append(f"{uploaded_file.original_filename}={speech_job_id}")
+        job.message = (
+            "OCI Speech transcription submitted. "
+            f"Speech jobs: {', '.join(speech_job_summaries)}."
+        )
+        session.commit()
+
+        speech_job_status = resolved_speech_service.wait_for_completion(
+            speech_job_id,
+            timeout_seconds=settings.OCI_SPEECH_TIMEOUT_SECONDS,
+            poll_interval_seconds=settings.OCI_SPEECH_POLL_INTERVAL_SECONDS,
+        )
+        if speech_job_status != "SUCCEEDED":
+            raise RuntimeError(
+                f"OCI Speech transcription job {speech_job_id} ended with "
+                f"status {speech_job_status}."
+            )
+
+        output = resolved_speech_service.read_transcription_output(
+            speech_job_id,
+            speech_job_status,
+            output_prefix,
+        )
+        extracted_content = ExtractedContent(
+            project_id=project_id,
+            uploaded_file_id=uploaded_file.id,
+            content_type="transcript",
+            title=f"{uploaded_file.original_filename} transcript",
+            text_content=output.transcript_text,
+            json_content=json.dumps(
+                {
+                    "speech_job_id": output.speech_job_id,
+                    "speech_job_status": output.speech_job_status,
+                    "speech_model_type": output.model_type,
+                    "speech_language_code": output.language_code,
+                    "source_media_file_id": uploaded_file.id,
+                    "source_media_filename": uploaded_file.original_filename,
+                    "output_prefix": output.output_prefix,
+                    "output_object_name": output.output_object_name,
+                    "timestamps": output.timestamps,
+                }
+            ),
+        )
+        session.add(extracted_content)
+        result.record_success()
+
+    return result
+
+
+def process_transcribe_media_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+    speech_service: object | None = None,
+) -> None:
+    job.status = "running"
+    job.progress = 10
+    job.message = "Starting OCI Speech transcription."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    result = transcribe_media_for_project(
+        session=session,
+        project_id=job.project_id,
+        job=job,
+        speech_service=speech_service,
+    )
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Transcribed {result.success_count} media file(s)."
     session.commit()
 
 
@@ -710,6 +830,7 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                     [
                         "classify_files",
                         "extract_transcripts",
+                        "transcribe_media",
                         "extract_docx",
                         "extract_pptx",
                         "extract_spreadsheets",
@@ -729,6 +850,12 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                     process_classify_files_job(session, job, sleep_seconds=sleep_seconds)
                 elif job.job_type == "extract_transcripts":
                     process_extract_transcripts_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "transcribe_media":
+                    process_transcribe_media_job(
                         session,
                         job,
                         sleep_seconds=sleep_seconds,

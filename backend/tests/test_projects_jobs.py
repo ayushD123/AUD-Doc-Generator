@@ -10,7 +10,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
 from app.models import Job, Project, UploadedFile
-from app.services.job_queue import get_job_queue_service
+from app.services.job_queue import LocalJobQueueService, get_job_queue_service
 
 
 class FakeJobQueueService:
@@ -48,6 +48,7 @@ def client(tmp_path: Path) -> Generator[TestClient, None, None]:
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_job_queue_service] = LocalJobQueueService
 
     with TestClient(app) as test_client:
         yield test_client
@@ -247,6 +248,36 @@ def test_create_extract_docx_job_returns_404_for_unknown_project(
     client: TestClient,
 ) -> None:
     response = client.post("/projects/missing-project/jobs/extract-docx")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_create_transcribe_media_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(f"/projects/{project_id}/jobs/transcribe-media")
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "transcribe_media"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "Media transcription job queued."
+
+
+def test_create_transcribe_media_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post("/projects/missing-project/jobs/transcribe-media")
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Project not found."

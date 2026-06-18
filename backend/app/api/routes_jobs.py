@@ -132,6 +132,25 @@ def create_extract_docx_job(
 
 
 @router.post(
+    "/transcribe-media",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_transcribe_media_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="transcribe_media",
+        message="Media transcription job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
     "/extract-pptx",
     response_model=JobRead,
     status_code=status.HTTP_201_CREATED,

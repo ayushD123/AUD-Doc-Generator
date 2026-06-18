@@ -20,6 +20,7 @@ from app.workers.local_worker import (
     process_extract_transcripts_job,
     process_generate_aud_plan_job,
     process_generate_docx_job,
+    process_transcribe_media_job,
 )
 
 
@@ -29,6 +30,7 @@ JobProcessor = Callable[..., None]
 JOB_PROCESSORS: dict[str, JobProcessor] = {
     "classify_files": process_classify_files_job,
     "extract_transcripts": process_extract_transcripts_job,
+    "transcribe_media": process_transcribe_media_job,
     "extract_docx": process_extract_docx_job,
     "extract_pptx": process_extract_pptx_job,
     "extract_spreadsheets": process_extract_spreadsheets_job,
@@ -37,6 +39,10 @@ JOB_PROCESSORS: dict[str, JobProcessor] = {
     "extract_open_points": process_extract_open_points_job,
     "generate_docx": process_generate_docx_job,
 }
+
+
+class UnrecoverableQueueMessageError(Exception):
+    pass
 
 
 def parse_queue_message_content(message: object) -> dict[str, Any]:
@@ -76,11 +82,13 @@ def process_job_by_id(
 ) -> None:
     job = session.get(Job, job_id)
     if job is None:
-        raise ValueError(f"Job {job_id} not found.")
+        raise UnrecoverableQueueMessageError(f"Job {job_id} not found.")
 
     processor = JOB_PROCESSORS.get(job.job_type)
     if processor is None:
-        raise ValueError(f"Unsupported job type: {job.job_type}.")
+        raise UnrecoverableQueueMessageError(
+            f"Unsupported job type: {job.job_type}."
+        )
 
     try:
         processor(session, job, sleep_seconds=sleep_seconds)
@@ -111,6 +119,10 @@ def delete_message(client: object, queue_id: str, message: object) -> None:
     client.delete_message(queue_id, get_message_receipt(message))
 
 
+def mark_message_skipped(message: object, reason: str) -> None:
+    setattr(message, "skip_reason", reason)
+
+
 def process_oci_queue_messages(
     client: object | None = None,
     settings: Settings | None = None,
@@ -128,18 +140,28 @@ def process_oci_queue_messages(
 
     with SessionLocal() as session:
         for message in get_messages(queue_client, queue_id, limit=max_messages):
-            payload = parse_queue_message_content(message)
-            job_id = payload.get("job_id")
-            if not job_id:
-                raise ValueError("OCI Queue message payload is missing job_id.")
+            should_delete_message = False
+            try:
+                payload = parse_queue_message_content(message)
+                job_id = payload.get("job_id")
+                if not job_id:
+                    raise UnrecoverableQueueMessageError(
+                        "OCI Queue message payload is missing job_id."
+                    )
 
-            process_job_by_id(
-                session,
-                str(job_id),
-                sleep_seconds=sleep_seconds,
-            )
-            delete_message(queue_client, queue_id, message)
-            processed_count += 1
+                process_job_by_id(
+                    session,
+                    str(job_id),
+                    sleep_seconds=sleep_seconds,
+                )
+                processed_count += 1
+                should_delete_message = True
+            except (json.JSONDecodeError, UnrecoverableQueueMessageError) as error:
+                mark_message_skipped(message, str(error))
+                should_delete_message = True
+            finally:
+                if should_delete_message:
+                    delete_message(queue_client, queue_id, message)
 
     return processed_count
 

@@ -6,9 +6,9 @@ This repository will evolve into a tool that helps generate Application Understa
 
 ## Current Phase
 
-The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace, local uploads, an optional OCI Object Storage adapter, optional OCI Queue publishing/worker support, deterministic extraction, source priority reporting, AUD planning, open point extraction, and rule-based editable DOCX draft output with frontend download controls.
+The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace, local uploads, an optional OCI Object Storage adapter, optional OCI Queue publishing/worker support, optional OCI Speech media transcription, deterministic extraction, source priority reporting, AUD planning, open point extraction, and rule-based editable DOCX draft output with frontend download controls.
 
-It intentionally does not include Docker configuration, authentication, Redis, speech transcription, or LLM calls.
+It intentionally does not include Docker configuration, authentication, Redis, or LLM calls.
 
 ## Source Priority
 

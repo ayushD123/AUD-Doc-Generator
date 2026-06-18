@@ -104,6 +104,22 @@ def test_upload_accepts_kt_session_mp4(client: TestClient) -> None:
     assert uploaded_file["source_role"] == "kt_session"
 
 
+def test_upload_accepts_kt_session_mp3(client: TestClient) -> None:
+    project_id = create_project(client)
+
+    response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "kt_session"},
+        files={"file": ("session.mp3", b"fake mp3 content", "audio/mpeg")},
+    )
+
+    assert response.status_code == 201
+    uploaded_file = response.json()
+    assert uploaded_file["original_filename"] == "session.mp3"
+    assert uploaded_file["file_type"] == "mp3"
+    assert uploaded_file["source_role"] == "kt_session"
+
+
 def test_upload_rejects_unsupported_file(client: TestClient) -> None:
     project_id = create_project(client)
 

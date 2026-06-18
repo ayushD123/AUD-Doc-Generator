@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, speech transcription, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, optional OCI Speech media transcription, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -192,6 +192,7 @@ GET  /projects/{project_id}/files
 POST /projects/{project_id}/jobs/classify-files
 POST /projects/{project_id}/jobs/extract-transcripts
 POST /projects/{project_id}/jobs/extract-docx
+POST /projects/{project_id}/jobs/transcribe-media
 POST /projects/{project_id}/jobs/extract-pptx
 POST /projects/{project_id}/jobs/extract-spreadsheets
 POST /projects/{project_id}/jobs/extract-all
@@ -235,7 +236,7 @@ curl.exe "http://127.0.0.1:8000/projects/{project_id}/files"
 Allowed file extensions:
 
 ```text
-.docx, .pptx, .xlsx, .xlsm, .txt, .pdf, .m4a, .mp4
+.docx, .pptx, .xlsx, .xlsm, .txt, .pdf, .mp3, .m4a, .mp4
 ```
 
 Allowed `source_role` values:
@@ -273,6 +274,12 @@ Create a DOCX extraction job:
 
 ```powershell
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-docx"
+```
+
+Create an OCI Speech media transcription job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/transcribe-media"
 ```
 
 Create a PPTX extraction job:
@@ -315,7 +322,7 @@ Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | extract_open_points | generate_docx",
+  "job_type": "classify_files | extract_transcripts | transcribe_media | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | extract_open_points | generate_docx",
   "status": "pending",
   "progress": 0
 }
@@ -331,6 +338,7 @@ The local worker picks pending jobs from the database and processes:
 
 - `classify_files`: assigns uploaded file types from extensions.
 - `extract_transcripts`: reads `.txt` uploads only and stores extracted transcript text.
+- `transcribe_media`: submits `.mp3`, `.m4a`, and `.mp4` media to OCI Speech when `STORAGE_BACKEND=oci`, then stores the returned transcript as extracted content.
 - `extract_docx`: reads `.docx` uploads and stores extracted paragraphs, heading-like paragraphs, tables, comments when present, and basic metadata.
 - `extract_pptx`: reads `.pptx` uploads, stores slide text/tables/notes metadata, and writes extracted images to local project storage.
 - `extract_spreadsheets`: reads `.xlsx` and `.xlsm` uploads and stores visible sheet structure, selected meaningful rows, formulas, and basic workbook metadata.
@@ -387,15 +395,71 @@ Current simulated classification mapping:
 .pptx       -> pptx
 .xlsx/.xlsm -> spreadsheet
 .txt        -> transcript_text
-.m4a/.mp4   -> media
+.mp3/.m4a/.mp4 -> media
 .pdf        -> pdf
 ```
 
 Current transcript extraction scope:
 
 - Only `.txt` files are read.
-- PDF, media transcription, LLM calls, and AUD generation are not included yet.
+- Plain text transcript extraction does not call OCI Speech.
 - Files are selected when `file_type` is `transcript_text` or the original filename ends in `.txt`.
+
+### OCI Speech Media Transcription
+
+Media transcription is optional and does not run in local filesystem storage
+mode. OCI Speech requires input media in Object Storage, so set
+`STORAGE_BACKEND=oci` before running `transcribe_media`.
+
+Required Speech settings:
+
+```powershell
+$env:STORAGE_BACKEND = "oci"
+$env:OCI_SPEECH_COMPARTMENT_OCID = "<compartment-ocid>"
+$env:OCI_SPEECH_OUTPUT_BUCKET = "<speech-output-bucket>"
+$env:OCI_SPEECH_OUTPUT_PREFIX = "projects/{project_id}/speech/"
+$env:OCI_SPEECH_MODEL_TYPE = "WHISPER_MEDIUM"
+$env:OCI_SPEECH_LANGUAGE_CODE = "en"
+$env:OCI_SPEECH_TIMEOUT_SECONDS = "1800"
+$env:OCI_SPEECH_POLL_INTERVAL_SECONDS = "10"
+```
+
+`WHISPER_MEDIUM` is the default model for this app. The installed OCI SDK
+also documents `ORACLE` and `WHISPER_LARGE_V2`; `WHISPER_LARGE_V2` is marked
+as available upon service request and may improve accuracy at the cost of
+latency/availability.
+
+The same Object Storage settings are also required because uploaded media is
+read from the configured input bucket:
+
+```powershell
+$env:OCI_BUCKET_NAME = "<input-upload-bucket>"
+$env:OCI_NAMESPACE = "<object-storage-namespace>"
+$env:OCI_REGION = "us-ashburn-1"
+$env:OCI_CONFIG_FILE = "$env:USERPROFILE\.oci\config"
+$env:OCI_PROFILE = "DEFAULT"
+```
+
+Run the job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/transcribe-media"
+python -m app.workers.local_worker
+```
+
+When `JOB_QUEUE_BACKEND=oci`, the same job can be processed by:
+
+```powershell
+python -m app.workers.oci_queue_worker
+```
+
+Expected results:
+
+- The worker submits one OCI Speech job per uploaded `.mp3`, `.m4a`, or `.mp4` file.
+- The job message includes submitted Speech job OCIDs while processing.
+- After Speech succeeds, transcript JSON is read from the configured output bucket/prefix.
+- An `ExtractedContent` row is created with `content_type=transcript`, title `<media filename> transcript`, transcript text, Speech job OCID, source media file id, output object name, and timestamps when present.
+- If `STORAGE_BACKEND` is not `oci` or Speech settings are missing, the job fails with a clear message.
 
 Current DOCX extraction scope:
 
