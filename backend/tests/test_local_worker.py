@@ -13,6 +13,7 @@ def test_classify_file_type_maps_extensions() -> None:
     assert classify_file_type("config.xlsx") == "spreadsheet"
     assert classify_file_type("macro.xlsm") == "spreadsheet"
     assert classify_file_type("transcript.txt") == "transcript_text"
+    assert classify_file_type("scan.png") == "image"
     assert classify_file_type("session.mp3") == "media"
     assert classify_file_type("session.m4a") == "media"
     assert classify_file_type("session.mp4") == "media"

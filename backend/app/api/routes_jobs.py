@@ -227,6 +227,120 @@ def create_generate_aud_plan_job(
 
 
 @router.post(
+    "/build-evidence-index",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_build_evidence_index_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="build_evidence_index",
+        message="Evidence index build job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
+    "/generate-source-summaries-ai",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_generate_source_summaries_ai_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="generate_source_summaries_ai",
+        message="AI source summary generation job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
+    "/enhance-aud-plan-ai",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_enhance_aud_plan_ai_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="enhance_aud_plan_ai",
+        message="AI AUD plan enhancement job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
+    "/build-section-evidence-packs",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_build_section_evidence_packs_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="build_section_evidence_packs",
+        message="Section evidence pack build job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
+    "/generate-section-drafts-ai",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_generate_section_drafts_ai_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="generate_section_drafts_ai",
+        message="AI section draft generation job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
+    "/enrich-document-understanding",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_enrich_document_understanding_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="enrich_with_document_understanding",
+        message="Document Understanding enrichment job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
     "/extract-open-points",
     response_model=JobRead,
     status_code=status.HTTP_201_CREATED,

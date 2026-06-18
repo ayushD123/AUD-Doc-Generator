@@ -23,6 +23,11 @@ FILE_TYPE_BY_EXTENSION = {
     ".xlsx": "spreadsheet",
     ".xlsm": "spreadsheet",
     ".txt": "transcript_text",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".png": "image",
+    ".tif": "image",
+    ".tiff": "image",
     ".mp3": "media",
     ".m4a": "media",
     ".mp4": "media",
@@ -628,6 +633,174 @@ def process_extract_spreadsheets_job(
     session.commit()
 
 
+def has_existing_document_understanding_extraction(
+    session: Session,
+    uploaded_file_id: str,
+) -> bool:
+    from app.services.document_intelligence import DOCUMENT_UNDERSTANDING_CONTENT_TYPE
+
+    existing_extraction = session.scalar(
+        select(ExtractedContent).where(
+            ExtractedContent.uploaded_file_id == uploaded_file_id,
+            ExtractedContent.content_type == DOCUMENT_UNDERSTANDING_CONTENT_TYPE,
+        )
+    )
+    return existing_extraction is not None
+
+
+def has_existing_non_document_understanding_extraction(
+    session: Session,
+    project_id: str,
+) -> bool:
+    from app.services.document_intelligence import DOCUMENT_UNDERSTANDING_CONTENT_TYPE
+
+    existing_extraction = session.scalar(
+        select(ExtractedContent).where(
+            ExtractedContent.project_id == project_id,
+            ExtractedContent.content_type != DOCUMENT_UNDERSTANDING_CONTENT_TYPE,
+        )
+    )
+    return existing_extraction is not None
+
+
+def enrich_documents_with_document_understanding(
+    session: Session,
+    project_id: str,
+    job: Job,
+    document_intelligence_service: object | None = None,
+) -> ExtractionResult:
+    from app.services.document_intelligence import (
+        DOCUMENT_UNDERSTANDING_CONTENT_TYPE,
+        NoOpDocumentIntelligenceService,
+        get_document_intelligence_service,
+        is_document_understanding_eligible,
+    )
+
+    settings = get_settings()
+    resolved_service = (
+        document_intelligence_service or get_document_intelligence_service()
+    )
+    result = ExtractionResult()
+
+    if isinstance(resolved_service, NoOpDocumentIntelligenceService):
+        return result
+
+    uploaded_files = list_project_uploaded_files(session, project_id)
+    eligible_files = [
+        uploaded_file
+        for uploaded_file in uploaded_files
+        if is_document_understanding_eligible(uploaded_file, settings)
+        and not has_existing_document_understanding_extraction(session, uploaded_file.id)
+    ]
+
+    for uploaded_file in eligible_files:
+        try:
+            job.message = (
+                "Running OCI Document Understanding for "
+                f"{uploaded_file.original_filename}."
+            )
+            session.commit()
+
+            normalized_result = resolved_service.analyze_document(
+                project_id=project_id,
+                uploaded_file=uploaded_file,
+                job_id=job.id,
+            )
+            if normalized_result is None:
+                continue
+
+            extracted_content = ExtractedContent(
+                project_id=project_id,
+                uploaded_file_id=uploaded_file.id,
+                content_type=DOCUMENT_UNDERSTANDING_CONTENT_TYPE,
+                title=(
+                    f"{uploaded_file.original_filename} - "
+                    "OCI Document Understanding"
+                ),
+                text_content=normalized_result.get("text") or "",
+                json_content=json.dumps(
+                    {
+                        "provider": "oci_document_understanding",
+                        "processor_job_id": normalized_result.get("processor_job_id"),
+                        "document_metadata": normalized_result.get(
+                            "document_metadata",
+                            {},
+                        ),
+                        "pages": normalized_result.get("pages", []),
+                        "detected_document_types": normalized_result.get(
+                            "detected_document_types",
+                            [],
+                        ),
+                        "tables": normalized_result.get("tables", []),
+                        "raw_result_object_path": normalized_result.get(
+                            "raw_result_object_path",
+                        ),
+                        "source_uploaded_file_id": uploaded_file.id,
+                    }
+                ),
+            )
+            session.add(extracted_content)
+            result.record_success()
+        except Exception as error:
+            result.record_error(uploaded_file, error)
+
+    return result
+
+
+def process_enrich_document_understanding_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+    document_intelligence_service: object | None = None,
+) -> None:
+    job.status = "running"
+    job.progress = 10
+    job.message = "Starting Document Understanding enrichment."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    result = enrich_documents_with_document_understanding(
+        session=session,
+        project_id=job.project_id,
+        job=job,
+        document_intelligence_service=document_intelligence_service,
+    )
+
+    sleep(sleep_seconds)
+
+    job.progress = 100
+    if result.attempted_count == 0:
+        job.status = "completed"
+        job.message = "No eligible files found for Document Understanding enrichment."
+    elif result.errors and result.success_count > 0:
+        job.status = "completed_with_warnings"
+        job.message = (
+            f"Enriched {result.success_count} of {result.attempted_count} file(s). "
+            "Warnings: "
+            + "; ".join(result.errors)
+        )
+    elif result.errors and result.success_count == 0:
+        if has_existing_non_document_understanding_extraction(session, job.project_id):
+            job.status = "completed_with_warnings"
+            job.message = (
+                f"Failed to enrich {result.attempted_count} file(s), but existing "
+                "extraction remains usable. Warnings: "
+                + "; ".join(result.errors)
+            )
+        else:
+            job.status = "failed"
+            job.message = (
+                f"Failed to enrich {result.attempted_count} file(s). Warnings: "
+                + "; ".join(result.errors)
+            )
+    else:
+        job.status = "completed"
+        job.message = f"Enriched {result.success_count} file(s)."
+
+    session.commit()
+
+
 def merge_extraction_results(results: list[ExtractionResult]) -> ExtractionResult:
     merged = ExtractionResult()
 
@@ -769,6 +942,155 @@ def process_generate_aud_plan_job(
     session.commit()
 
 
+def process_build_evidence_index_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.evidence_index import build_evidence_index
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Building normalized evidence index."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    evidence_items = build_evidence_index(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Evidence index contains {len(evidence_items)} item(s)."
+    session.commit()
+
+
+def process_generate_source_summaries_ai_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.source_summary_service import generate_source_summaries_ai
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Generating AI source summaries."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    result = generate_source_summaries_ai(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.progress = 100
+
+    if result.warnings and result.summaries:
+        job.status = "completed_with_warnings"
+        job.message = (
+            f"Generated {len(result.summaries)} source summary record(s) with "
+            f"{len(result.warnings)} warning(s)."
+        )
+    elif result.warnings and not result.summaries:
+        job.status = "failed"
+        job.message = (
+            "AI source summary generation failed for all source group(s): "
+            + "; ".join(result.warnings)
+        )
+    else:
+        job.status = "completed"
+        job.message = f"Generated {len(result.summaries)} source summary record(s)."
+
+    session.commit()
+
+
+def process_enhance_aud_plan_ai_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.aud_plan_ai_enhancement import enhance_aud_plan_ai
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Enhancing AUD plan with AI."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    aud_plan = enhance_aud_plan_ai(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Enhanced AUD plan {aud_plan.id}."
+    session.commit()
+
+
+def process_build_section_evidence_packs_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.section_evidence_pack import build_section_evidence_packs
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Building section evidence packs."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    packs = build_section_evidence_packs(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = f"Built {len(packs)} section evidence pack(s)."
+    session.commit()
+
+
+def process_generate_section_drafts_ai_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.section_drafting_ai import generate_section_drafts_ai
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Generating AI section drafts."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    result = generate_section_drafts_ai(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.progress = 100
+    if result.warnings and result.drafts:
+        job.status = "completed_with_warnings"
+        job.message = (
+            f"Generated {len(result.drafts)} section draft(s) with "
+            f"{len(result.warnings)} warning(s)."
+        )
+    elif result.warnings and not result.drafts:
+        job.status = "failed"
+        job.message = (
+            "AI section draft generation failed for all section(s): "
+            + "; ".join(result.warnings)
+        )
+    else:
+        job.status = "completed"
+        job.message = f"Generated {len(result.drafts)} section draft(s)."
+
+    session.commit()
+
+
 def process_extract_open_points_job(
     session: Session,
     job: Job,
@@ -834,8 +1156,14 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         "extract_docx",
                         "extract_pptx",
                         "extract_spreadsheets",
+                        "enrich_with_document_understanding",
                         "extract_all",
                         "generate_aud_plan",
+                        "build_evidence_index",
+                        "generate_source_summaries_ai",
+                        "enhance_aud_plan_ai",
+                        "build_section_evidence_packs",
+                        "generate_section_drafts_ai",
                         "extract_open_points",
                         "generate_docx",
                     ]
@@ -870,10 +1198,46 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         job,
                         sleep_seconds=sleep_seconds,
                     )
+                elif job.job_type == "enrich_with_document_understanding":
+                    process_enrich_document_understanding_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
                 elif job.job_type == "extract_all":
                     process_extract_all_job(session, job, sleep_seconds=sleep_seconds)
                 elif job.job_type == "generate_aud_plan":
                     process_generate_aud_plan_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "build_evidence_index":
+                    process_build_evidence_index_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "generate_source_summaries_ai":
+                    process_generate_source_summaries_ai_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "enhance_aud_plan_ai":
+                    process_enhance_aud_plan_ai_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "build_section_evidence_packs":
+                    process_build_section_evidence_packs_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "generate_section_drafts_ai":
+                    process_generate_section_drafts_ai_job(
                         session,
                         job,
                         sleep_seconds=sleep_seconds,

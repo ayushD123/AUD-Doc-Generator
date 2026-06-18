@@ -12,6 +12,10 @@ from app.models import Job
 from app.services.job_queue import OCIJobQueueService
 from app.workers.local_worker import (
     process_classify_files_job,
+    process_build_evidence_index_job,
+    process_build_section_evidence_packs_job,
+    process_enhance_aud_plan_ai_job,
+    process_enrich_document_understanding_job,
     process_extract_all_job,
     process_extract_docx_job,
     process_extract_open_points_job,
@@ -20,6 +24,8 @@ from app.workers.local_worker import (
     process_extract_transcripts_job,
     process_generate_aud_plan_job,
     process_generate_docx_job,
+    process_generate_section_drafts_ai_job,
+    process_generate_source_summaries_ai_job,
     process_transcribe_media_job,
 )
 
@@ -29,6 +35,10 @@ JobProcessor = Callable[..., None]
 
 JOB_PROCESSORS: dict[str, JobProcessor] = {
     "classify_files": process_classify_files_job,
+    "build_evidence_index": process_build_evidence_index_job,
+    "build_section_evidence_packs": process_build_section_evidence_packs_job,
+    "enhance_aud_plan_ai": process_enhance_aud_plan_ai_job,
+    "enrich_with_document_understanding": process_enrich_document_understanding_job,
     "extract_transcripts": process_extract_transcripts_job,
     "transcribe_media": process_transcribe_media_job,
     "extract_docx": process_extract_docx_job,
@@ -36,6 +46,8 @@ JOB_PROCESSORS: dict[str, JobProcessor] = {
     "extract_spreadsheets": process_extract_spreadsheets_job,
     "extract_all": process_extract_all_job,
     "generate_aud_plan": process_generate_aud_plan_job,
+    "generate_source_summaries_ai": process_generate_source_summaries_ai_job,
+    "generate_section_drafts_ai": process_generate_section_drafts_ai_job,
     "extract_open_points": process_extract_open_points_job,
     "generate_docx": process_generate_docx_job,
 }
@@ -79,7 +91,7 @@ def process_job_by_id(
     session: Session,
     job_id: str,
     sleep_seconds: float = 0.2,
-) -> None:
+) -> bool:
     job = session.get(Job, job_id)
     if job is None:
         raise UnrecoverableQueueMessageError(f"Job {job_id} not found.")
@@ -92,9 +104,10 @@ def process_job_by_id(
 
     try:
         processor(session, job, sleep_seconds=sleep_seconds)
+        return True
     except Exception as error:
         mark_job_failed(session, job, error)
-        raise
+        return False
 
 
 def build_queue_client(settings: Settings) -> object:

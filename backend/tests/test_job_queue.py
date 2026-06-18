@@ -105,10 +105,14 @@ def test_oci_worker_marks_database_job_failed_when_processing_raises(
         session.commit()
         job_id = job.id
 
-        with pytest.raises(RuntimeError, match="simulated OCI worker failure"):
-            oci_queue_worker.process_job_by_id(session, job_id, sleep_seconds=0)
+        processed = oci_queue_worker.process_job_by_id(
+            session,
+            job_id,
+            sleep_seconds=0,
+        )
 
         session.refresh(job)
+        assert processed is False
         assert job.status == "failed"
         assert "simulated OCI worker failure" in (job.message or "")
 
@@ -252,22 +256,22 @@ def test_oci_worker_keeps_message_when_processing_fails(
     client = FakeOCIQueueWorkerClient([message])
 
     try:
-        with pytest.raises(RuntimeError, match="transient processor failure"):
-            oci_queue_worker.process_oci_queue_messages(
-                client=client,
-                settings=Settings(
-                    JOB_QUEUE_BACKEND="oci",
-                    OCI_QUEUE_OCID="ocid1.queue.oc1..example",
-                ),
-                sleep_seconds=0,
-            )
+        processed_count = oci_queue_worker.process_oci_queue_messages(
+            client=client,
+            settings=Settings(
+                JOB_QUEUE_BACKEND="oci",
+                OCI_QUEUE_OCID="ocid1.queue.oc1..example",
+            ),
+            sleep_seconds=0,
+        )
 
         with session_local() as session:
             job = session.get(Job, job_id)
             assert job is not None
             assert job.status == "failed"
             assert "transient processor failure" in (job.message or "")
-            assert client.deleted_receipts == []
+            assert processed_count == 1
+            assert client.deleted_receipts == ["retry-receipt"]
     finally:
         Base.metadata.drop_all(bind=engine)
         engine.dispose()

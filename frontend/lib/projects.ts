@@ -134,6 +134,34 @@ export type GeneratedDocument = {
   created_at: string | null;
 };
 
+export type EvidenceItem = {
+  id: string;
+  project_id: string;
+  source_uploaded_file_id: string | null;
+  source_extracted_content_id: string | null;
+  evidence_type: string;
+  source_role: string | null;
+  title: string | null;
+  text: string | null;
+  json_data: string | null;
+  priority: number;
+  confidence: string;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type SourceSummary = {
+  id: string;
+  project_id: string;
+  source_uploaded_file_id: string | null;
+  source_role: string;
+  summary_type: string;
+  summary_text: string;
+  summary_json: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 export const sourceRoles: SourceRole[] = [
   "template_aud",
   "final_aud_sample",
@@ -246,6 +274,14 @@ export function listGeneratedDocuments(projectId: string) {
   );
 }
 
+export function listEvidenceItems(projectId: string) {
+  return requestJson<EvidenceItem[]>(`/projects/${projectId}/evidence-items`);
+}
+
+export function listSourceSummaries(projectId: string) {
+  return requestJson<SourceSummary[]>(`/projects/${projectId}/source-summaries`);
+}
+
 export function getGeneratedDocumentDownloadUrl(
   projectId: string,
   documentId: string,
@@ -281,6 +317,21 @@ export function createGenerateDocxJob(projectId: string) {
   return requestJson<Job>(`/projects/${projectId}/jobs/generate-docx`, {
     method: "POST",
   });
+}
+
+export function createBuildEvidenceIndexJob(projectId: string) {
+  return requestJson<Job>(`/projects/${projectId}/jobs/build-evidence-index`, {
+    method: "POST",
+  });
+}
+
+export function createGenerateSourceSummariesAiJob(projectId: string) {
+  return requestJson<Job>(
+    `/projects/${projectId}/jobs/generate-source-summaries-ai`,
+    {
+      method: "POST",
+    },
+  );
 }
 
 export async function uploadProjectFile(

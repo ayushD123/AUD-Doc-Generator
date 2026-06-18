@@ -9,8 +9,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, new_uuid, utc_now
 
 if TYPE_CHECKING:
+    from app.models.evidence_item import EvidenceItem
     from app.models.extracted_content import ExtractedContent
     from app.models.project import Project
+    from app.models.source_summary import SourceSummary
 
 
 class UploadedFile(Base):
@@ -36,4 +38,10 @@ class UploadedFile(Base):
     extracted_contents: Mapped[list["ExtractedContent"]] = relationship(
         back_populates="uploaded_file",
         cascade="all, delete-orphan",
+    )
+    evidence_items: Mapped[list["EvidenceItem"]] = relationship(
+        back_populates="source_uploaded_file",
+    )
+    source_summaries: Mapped[list["SourceSummary"]] = relationship(
+        back_populates="source_uploaded_file",
     )

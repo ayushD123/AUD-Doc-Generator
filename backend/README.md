@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, optional OCI Speech media transcription, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, authentication, LLM calls, template-perfect AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, optional OCI Speech media transcription, optional OCI Document Understanding enrichment, normalized evidence indexing, an optional OCI Generative AI LLM wrapper, AI source summary generation, AI section draft generation, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, authentication, final LLM-driven DOCX AUD generation, template-perfect AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -197,11 +197,21 @@ POST /projects/{project_id}/jobs/extract-pptx
 POST /projects/{project_id}/jobs/extract-spreadsheets
 POST /projects/{project_id}/jobs/extract-all
 POST /projects/{project_id}/jobs/generate-aud-plan
+POST /projects/{project_id}/jobs/build-evidence-index
+POST /projects/{project_id}/jobs/generate-source-summaries-ai
+POST /projects/{project_id}/jobs/enhance-aud-plan-ai
+POST /projects/{project_id}/jobs/build-section-evidence-packs
+POST /projects/{project_id}/jobs/generate-section-drafts-ai
+POST /projects/{project_id}/jobs/enrich-document-understanding
 POST /projects/{project_id}/jobs/extract-open-points
 POST /projects/{project_id}/jobs/generate-docx
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
 GET  /projects/{project_id}/extracted-content
+GET  /projects/{project_id}/evidence-items
+GET  /projects/{project_id}/source-summaries
+GET  /projects/{project_id}/section-evidence-packs
+GET  /projects/{project_id}/section-drafts
 GET  /projects/{project_id}/source-priority-report
 GET  /projects/{project_id}/aud-plan
 GET  /projects/{project_id}/open-points
@@ -236,7 +246,7 @@ curl.exe "http://127.0.0.1:8000/projects/{project_id}/files"
 Allowed file extensions:
 
 ```text
-.docx, .pptx, .xlsx, .xlsm, .txt, .pdf, .mp3, .m4a, .mp4
+.docx, .pptx, .xlsx, .xlsm, .txt, .pdf, .jpg, .jpeg, .png, .tif, .tiff, .mp3, .m4a, .mp4
 ```
 
 Allowed `source_role` values:
@@ -306,6 +316,42 @@ Create an AUD plan generation job:
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-aud-plan"
 ```
 
+Create a normalized evidence index job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/build-evidence-index"
+```
+
+Create AI source summaries from evidence:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-source-summaries-ai"
+```
+
+Create an AI-enhanced AUD plan:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/enhance-aud-plan-ai"
+```
+
+Create deterministic section evidence packs:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/build-section-evidence-packs"
+```
+
+Create AI section drafts from section evidence packs:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-section-drafts-ai"
+```
+
+Create an OCI Document Understanding enrichment job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/enrich-document-understanding"
+```
+
 Create an open points extraction job:
 
 ```powershell
@@ -322,7 +368,7 @@ Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts | transcribe_media | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | extract_open_points | generate_docx",
+  "job_type": "classify_files | extract_transcripts | transcribe_media | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | build_evidence_index | generate_source_summaries_ai | enhance_aud_plan_ai | build_section_evidence_packs | generate_section_drafts_ai | enrich_with_document_understanding | extract_open_points | generate_docx",
   "status": "pending",
   "progress": 0
 }
@@ -344,6 +390,12 @@ The local worker picks pending jobs from the database and processes:
 - `extract_spreadsheets`: reads `.xlsx` and `.xlsm` uploads and stores visible sheet structure, selected meaningful rows, formulas, and basic workbook metadata.
 - `extract_all`: runs transcript, DOCX, PPTX, and spreadsheet extraction in one job.
 - `generate_aud_plan`: creates a deterministic draft AUD plan JSON from extracted content and source-priority rules.
+- `build_evidence_index`: converts extracted content into normalized, prioritized evidence items for future AUD planning and drafting.
+- `generate_source_summaries_ai`: groups evidence by source file and source role, asks the configured LLM for strict JSON summaries, and stores source summaries for later AUD enhancement.
+- `enhance_aud_plan_ai`: asks the configured LLM to improve section selection, naming, ordering, and source mapping while preserving deterministic source-priority authority.
+- `build_section_evidence_packs`: deterministically curates bounded evidence packets per AUD section from the latest plan, evidence index, source summaries, and source-priority rules. It does not call an LLM.
+- `generate_section_drafts_ai`: asks the configured LLM for one strict JSON section draft per evidence pack, stores reviewable drafts, and inserts deduped open point candidates.
+- `enrich_with_document_understanding`: optionally enriches eligible uploaded files with OCI Document Understanding OCR/table/classification output without replacing local extraction.
 - `extract_open_points`: scans extracted content for unresolved questions and stores deduplicated open points.
 - `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, unresolved open points, and writes it through the configured storage backend.
 
@@ -395,6 +447,7 @@ Current simulated classification mapping:
 .pptx       -> pptx
 .xlsx/.xlsm -> spreadsheet
 .txt        -> transcript_text
+.jpg/.jpeg/.png/.tif/.tiff -> image
 .mp3/.m4a/.mp4 -> media
 .pdf        -> pdf
 ```
@@ -460,6 +513,328 @@ Expected results:
 - After Speech succeeds, transcript JSON is read from the configured output bucket/prefix.
 - An `ExtractedContent` row is created with `content_type=transcript`, title `<media filename> transcript`, transcript text, Speech job OCID, source media file id, output object name, and timestamps when present.
 - If `STORAGE_BACKEND` is not `oci` or Speech settings are missing, the job fails with a clear message.
+
+### OCI Document Understanding Enrichment
+
+Document Understanding is optional enrichment. It does not replace local DOCX,
+PPTX, spreadsheet, transcript, or Speech extraction. FDD remains the golden
+source, and local workbook extraction remains primary for `.xlsx` and `.xlsm`.
+
+By default the provider is disabled:
+
+```text
+DOCUMENT_AI_PROVIDER=none
+```
+
+Enable OCI Document Understanding only when uploaded files are stored in Object
+Storage:
+
+```powershell
+$env:STORAGE_BACKEND = "oci"
+$env:DOCUMENT_AI_PROVIDER = "oci_document_understanding"
+$env:OCI_DOCUMENT_COMPARTMENT_OCID = "<compartment-ocid>"
+$env:OCI_DOCUMENT_OUTPUT_BUCKET = "<document-output-bucket>"
+$env:OCI_DOCUMENT_OUTPUT_PREFIX = "projects/{project_id}/document_understanding/output/"
+$env:OCI_DOCUMENT_TIMEOUT_SECONDS = "900"
+$env:OCI_DOCUMENT_POLL_INTERVAL_SECONDS = "10"
+```
+
+Optional region override:
+
+```powershell
+$env:OCI_DOCUMENT_REGION = "us-ashburn-1"
+```
+
+Eligibility flags:
+
+```powershell
+$env:OCI_DOCUMENT_ENABLE_PDF = "true"
+$env:OCI_DOCUMENT_ENABLE_IMAGES = "true"
+$env:OCI_DOCUMENT_ENABLE_DOCX = "false"
+$env:OCI_DOCUMENT_ENABLE_PPTX = "false"
+$env:OCI_DOCUMENT_ENABLE_XLSX = "false"
+```
+
+Run the enrichment:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/enrich-document-understanding"
+python -m app.workers.local_worker
+```
+
+When `JOB_QUEUE_BACKEND=oci`, process it with:
+
+```powershell
+python -m app.workers.oci_queue_worker
+```
+
+Expected results:
+
+- Eligible PDFs and image files are submitted to OCI Document Understanding by default.
+- DOCX, PPTX, and XLSX/XLSM are skipped unless explicitly enabled.
+- Existing successful DU extraction for the same uploaded file is skipped.
+- DU output is stored as `ExtractedContent` with `content_type=oci_document_understanding`.
+- `json_content` includes provider, processor job id, document metadata, pages, detected document types, tables, raw result object path, and source uploaded file id.
+- If some files fail, the job ends as `completed_with_warnings` and existing local extraction remains usable.
+
+## Evidence Index
+
+The evidence index is the normalized layer between raw extraction and future
+LLM-based AUD drafting. LLM stages should consume `EvidenceItem` rows rather
+than raw `ExtractedContent` directly.
+
+Build evidence after extraction and optional enrichment:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/build-evidence-index"
+python -m app.workers.local_worker
+```
+
+With OCI Queue mode:
+
+```powershell
+python -m app.workers.oci_queue_worker
+```
+
+List evidence:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/evidence-items"
+```
+
+Evidence priority rules:
+
+- FDD headings, paragraphs, tables, and open items: priority `100`.
+- OCI Document Understanding from FDD sources: priority `95`.
+- KT transcript/session segments: priority `80`.
+- KT PPT slides and image references: priority `70`.
+- Configuration workbook sheets/tables: priority `60`.
+- OCI Document Understanding from supporting documents: priority `65`.
+- Unknown OCI Document Understanding output: priority `50`.
+- Final AUD samples: priority `30` with `style_reference=true`.
+
+The evidence build job is idempotent. Reruns use a deterministic key based on
+project id, source extracted content id, evidence type, title, and text hash to
+avoid duplicates.
+
+## AI Source Summaries
+
+Source summaries are concise LLM-generated summaries of normalized
+`EvidenceItem` rows, grouped by source file and source role. They prepare the
+project for later AUD plan enhancement and section drafting, but they do not
+generate or modify the AUD yet.
+
+Build evidence first, then generate summaries:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/build-evidence-index"
+python -m app.workers.local_worker
+
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-source-summaries-ai"
+python -m app.workers.local_worker
+```
+
+List summaries:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/source-summaries"
+```
+
+Each summary asks the LLM for strict JSON:
+
+```json
+{
+  "source_role": "...",
+  "summary": "...",
+  "important_topics": [],
+  "tables_or_configurations": [],
+  "processes": [],
+  "screenshots_or_images_to_consider": [],
+  "open_or_unresolved_items": [],
+  "source_confidence": "high|medium|low",
+  "aud_usage_guidance": "..."
+}
+```
+
+Prompt rules:
+
+- Use only provided evidence.
+- Do not invent missing details.
+- Mark missing or unclear information explicitly.
+- FDD summaries identify FDD as the golden source.
+- Configuration workbook summaries describe setup facts and validation details; they should not be copied blindly as primary narrative.
+- Transcript summaries focus on presenter emphasis, corrections, Q&A, deferred items, and screenshot relevance.
+- PPT summaries focus on slide topics, tables, screenshots/images, and process/configuration topics.
+- Final AUD sample summaries describe style and structure only.
+
+If one source fails LLM JSON validation or provider execution, the worker
+continues summarizing other sources. If at least one source succeeds, the job
+ends as `completed_with_warnings`; if all source groups fail, the job is marked
+`failed`.
+
+## AI-Enhanced AUD Plan
+
+The AI-enhanced AUD plan is a refinement layer on top of the deterministic AUD
+plan. It uses the existing deterministic plan, source priority report, source
+summaries, and top-priority evidence items to improve section selection, naming,
+ordering, and source mapping. It does not overwrite the deterministic plan
+sections.
+
+Recommended order:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-aud-plan"
+python -m app.workers.local_worker
+
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/build-evidence-index"
+python -m app.workers.local_worker
+
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-source-summaries-ai"
+python -m app.workers.local_worker
+
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/enhance-aud-plan-ai"
+python -m app.workers.local_worker
+```
+
+If no deterministic plan exists, the worker creates one first. The AI response
+is stored inside the latest `AUDPlan.plan_json` under:
+
+```json
+{
+  "ai_enhanced_plan": {
+    "document_strategy": {},
+    "sections": [],
+    "image_strategy": [],
+    "table_strategy": [],
+    "open_point_candidates": [],
+    "warnings": []
+  }
+}
+```
+
+The prompt reinforces these rules:
+
+- FDD remains the golden source when present.
+- FDD wins over transcript, PPT, and configuration workbook conflicts.
+- Explicit template controls structure; the default SCM template is used only when no explicit template is uploaded.
+- Empty or unsupported sections are omitted.
+- `Documents Referred` is not included for now.
+- Reporting/RICEW sections are included only if mentioned or provided.
+- Open Points are unresolved items only.
+- Configuration workbook validates and enriches; it is not primary narrative when FDD exists.
+- Final AUD samples are style/reference only unless explicitly uploaded as a template.
+
+## Section Evidence Packs
+
+Section evidence packs are deterministic, bounded evidence packets for future
+AI section drafting. They do not call an LLM and do not generate AUD prose.
+
+Build them after an AUD plan and evidence index exist. Source summaries and the
+AI-enhanced AUD plan are optional but improve mapping quality:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/build-section-evidence-packs"
+python -m app.workers.local_worker
+```
+
+With OCI Queue mode:
+
+```powershell
+python -m app.workers.oci_queue_worker
+```
+
+List packs:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/section-evidence-packs"
+```
+
+Each `SectionEvidencePack.pack_json` has this shape:
+
+```json
+{
+  "section_id": "...",
+  "section_title": "...",
+  "source_priority_rules": [],
+  "golden_source_present": true,
+  "primary_evidence": [],
+  "supporting_evidence": [],
+  "configuration_evidence": [],
+  "transcript_context": [],
+  "image_candidates": [],
+  "table_candidates": [],
+  "open_point_candidates": [],
+  "excluded_evidence": [],
+  "missing_information": []
+}
+```
+
+Pack rules:
+
+- FDD evidence mapped to a section goes into `primary_evidence`.
+- If FDD evidence exists for the section, lower-priority evidence is retained as supporting/configuration/context/image/table evidence rather than promoted over FDD.
+- Configuration workbook evidence goes into `configuration_evidence`, unless no FDD, PPT, or transcript evidence matches that section; in that case it may become `primary_evidence` with a traceable reason.
+- KT transcript/session evidence goes into `transcript_context`.
+- PPT slide/image evidence goes into `image_candidates`, `table_candidates`, or `supporting_evidence` depending on evidence type.
+- Evidence item IDs are preserved for traceability.
+- Rerunning the job replaces prior packs for the project.
+- Pack size is bounded by `SECTION_EVIDENCE_MAX_CHARS`, default `30000`.
+
+## AI Section Drafts
+
+AI section drafts use `SectionEvidencePack` rows as their only source material.
+This stage prepares reviewable section prose but does not yet feed the final
+DOCX generator.
+
+Generate drafts:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-section-drafts-ai"
+python -m app.workers.local_worker
+```
+
+With OCI Queue mode:
+
+```powershell
+python -m app.workers.oci_queue_worker
+```
+
+List drafts:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/section-drafts"
+```
+
+The worker ensures section evidence packs exist first. For each pack, it asks
+the configured LLM for strict JSON:
+
+```json
+{
+  "section_id": "...",
+  "title": "...",
+  "draft_text": "...",
+  "confidence": "high|medium|low",
+  "used_evidence_item_ids": [],
+  "included_tables": [],
+  "included_images": [],
+  "unsupported_details": [],
+  "open_point_candidates": [],
+  "placeholders": []
+}
+```
+
+Drafting rules:
+
+- Use only evidence in the evidence pack.
+- FDD remains the golden source.
+- Do not invent customer, process, or configuration details.
+- Do not include generic Oracle SCM facts unless supported by inputs.
+- If information is unclear, use placeholders or propose open points.
+- If no supported evidence exists, the stored draft is forced to a placeholder with low confidence.
+- `draft_text` should be Word-document-ready prose without inline citations.
+- Evidence traceability is stored in `used_evidence_item_ids`.
+- Open point candidates are inserted into `OpenPoint` with simple question-level dedupe.
+- If one section fails LLM JSON validation or provider execution, the worker continues with other sections and marks the job `completed_with_warnings` when at least one draft succeeds.
 
 Current DOCX extraction scope:
 
@@ -772,6 +1147,116 @@ Expected results:
 - Matching PPT images appear below relevant planned sections with source slide captions when extracted image files exist locally.
 - If an earlier AUD plan was generated before extraction or before FDD content was available, the DOCX job refreshes the plan so extracted FDD/PPT sections can appear and FDD can win.
 - No LLM call, OCR, image interpretation, or template-perfect formatting is used.
+
+## OCI Generative AI LLM Wrapper
+
+The backend has an optional LLM service wrapper for later AUD planning,
+summaries, conflict detection, and section drafting. AUD generation does not use
+this wrapper yet.
+
+Default local and test behavior:
+
+```text
+LLM_PROVIDER=none
+```
+
+Supported provider values:
+
+```text
+none
+oci_responses
+oci_genai_classic
+```
+
+For the OCI Python SDK chat flow you can call the model directly with
+`LLM_PROVIDER=oci_genai_classic`. That mode does not require
+`OCI_GENAI_PROJECT_OCID` or `OCI_GENAI_API_KEY`; it uses your OCI config file
+and the compartment/model values, matching the standalone SDK sample.
+
+Shared safeguards:
+
+```text
+OCI_GENAI_MODEL_ID=<model-ocid-or-provider-model-id>
+OCI_GENAI_MAX_INPUT_CHARS=200000
+OCI_GENAI_TIMEOUT_SECONDS=120
+OCI_GENAI_TEMPERATURE=1
+OCI_GENAI_MAX_OUTPUT_TOKENS=16000
+```
+
+The wrapper validates prompt length before calling a provider and does not log
+full prompts or source content by default. Prompt builders reserve room for
+system/JSON instructions before applying `OCI_GENAI_MAX_INPUT_CHARS`, so bounded
+AI jobs do not fail just because wrapper text was added after trimming. JSON
+calls strip simple markdown JSON fences, parse strictly, and fail with a
+controlled error if the model returns invalid JSON.
+
+Some OCI Generative AI models, including newer GPT-style models, only accept the
+default temperature value. Keep `OCI_GENAI_TEMPERATURE=1` for those models. The
+classic SDK wrapper retries once with the default temperature if OCI rejects a
+custom temperature value.
+
+AI-enhanced AUD plan output is larger than source-summary output because it
+returns section mapping JSON. If OCI returns `finish_reason=length`, increase
+`OCI_GENAI_MAX_OUTPUT_TOKENS` or reduce the project evidence included in the AI
+plan job.
+
+### OCI Responses API Mode
+
+Use this mode when your tenancy exposes the OpenAI-compatible OCI Responses API:
+
+```powershell
+$env:ENVIRONMENT = "development"
+$env:LLM_PROVIDER = "oci_responses"
+$env:OCI_GENAI_REGION = "us-chicago-1"
+$env:OCI_GENAI_MODEL_ID = "<model-id>"
+$env:OCI_GENAI_PROJECT_OCID = "<optional-genai-project-ocid>"
+$env:OCI_GENAI_API_KEY = "<optional-dev-api-key-if-your-responses-setup-needs-it>"
+uvicorn app.main:app --reload
+```
+
+The service uses:
+
+```text
+https://inference.generativeai.{region}.oci.oraclecloud.com/openai/v1
+```
+
+### OCI Generative AI Classic SDK Mode
+
+Use this mode for the OCI Python SDK `GenerativeAiInferenceClient` flow:
+
+```powershell
+$env:ENVIRONMENT = "development"
+$env:LLM_PROVIDER = "oci_genai_classic"
+$env:OCI_GENAI_REGION = "us-chicago-1"
+$env:OCI_GENAI_COMPARTMENT_OCID = "<compartment-ocid>"
+$env:OCI_GENAI_MODEL_ID = "<model-ocid>"
+$env:OCI_CONFIG_FILE = "$env:USERPROFILE\.oci\config"
+$env:OCI_PROFILE = "DEFAULT"
+uvicorn app.main:app --reload
+```
+
+This is the mode that matches the direct `GenerativeAiInferenceClient.chat`
+sample. Required values are region, compartment OCID, model ID, and OCI config
+authentication. `OCI_GENAI_PROJECT_OCID` and `OCI_GENAI_API_KEY` can be left
+blank.
+
+### Development LLM Test Endpoint
+
+This endpoint is intentionally available only when:
+
+```text
+ENVIRONMENT=development
+```
+
+Test with a JSON-only prompt:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/dev/llm-test" `
+  -H "Content-Type: application/json" `
+  -d "{\"prompt\":\"Reply with JSON only: {\\\"status\\\":\\\"ok\\\"}\"}"
+```
+
+Outside development, the endpoint returns `404`.
 
 ## Run Tests
 

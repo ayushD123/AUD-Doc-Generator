@@ -120,6 +120,22 @@ def test_upload_accepts_kt_session_mp3(client: TestClient) -> None:
     assert uploaded_file["source_role"] == "kt_session"
 
 
+def test_upload_accepts_scanned_image(client: TestClient) -> None:
+    project_id = create_project(client)
+
+    response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "supporting_doc"},
+        files={"file": ("scan.png", b"fake image content", "image/png")},
+    )
+
+    assert response.status_code == 201
+    uploaded_file = response.json()
+    assert uploaded_file["original_filename"] == "scan.png"
+    assert uploaded_file["file_type"] == "png"
+    assert uploaded_file["source_role"] == "supporting_doc"
+
+
 def test_upload_rejects_unsupported_file(client: TestClient) -> None:
     project_id = create_project(client)
 

@@ -9,13 +9,12 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, new_uuid, utc_now
 
 if TYPE_CHECKING:
-    from app.models.evidence_item import EvidenceItem
     from app.models.project import Project
     from app.models.uploaded_file import UploadedFile
 
 
-class ExtractedContent(Base):
-    __tablename__ = "extracted_contents"
+class SourceSummary(Base):
+    __tablename__ = "source_summaries"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     project_id: Mapped[str] = mapped_column(
@@ -23,25 +22,28 @@ class ExtractedContent(Base):
         ForeignKey("projects.id"),
         nullable=False,
     )
-    uploaded_file_id: Mapped[str] = mapped_column(
+    source_uploaded_file_id: Mapped[str | None] = mapped_column(
         String(36),
         ForeignKey("uploaded_files.id"),
-        nullable=False,
+        nullable=True,
     )
-    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
-    title: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    text_content: Mapped[str | None] = mapped_column(Text, nullable=True)
-    json_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_role: Mapped[str] = mapped_column(String(100), nullable=False)
+    summary_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    summary_text: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
         default=utc_now,
     )
-
-    project: Mapped["Project"] = relationship(back_populates="extracted_contents")
-    uploaded_file: Mapped["UploadedFile"] = relationship(
-        back_populates="extracted_contents"
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        onupdate=utc_now,
     )
-    evidence_items: Mapped[list["EvidenceItem"]] = relationship(
-        back_populates="source_extracted_content",
+
+    project: Mapped["Project"] = relationship(back_populates="source_summaries")
+    source_uploaded_file: Mapped["UploadedFile | None"] = relationship(
+        back_populates="source_summaries",
     )

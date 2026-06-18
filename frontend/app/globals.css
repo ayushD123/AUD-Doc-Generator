@@ -109,7 +109,20 @@ h3 {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+}
+
+.panel-content {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.section-actions {
+  justify-content: flex-end;
+}
+
+.section-toggle-button {
+  min-width: 96px;
 }
 
 .project-form,
@@ -218,6 +231,9 @@ h3 {
 .job-list,
 .aud-plan-section-list,
 .extracted-content-list,
+.evidence-item-list,
+.source-summary-group-list,
+.source-summary-list,
 .generated-document-list {
   display: grid;
   gap: 12px;
@@ -228,6 +244,8 @@ h3 {
 .job-row,
 .aud-plan-section-row,
 .extracted-content-row,
+.evidence-item-row,
+.source-summary-row,
 .generated-document-row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
@@ -248,6 +266,8 @@ h3 {
 .job-row p,
 .aud-plan-section-row p,
 .extracted-content-row p,
+.evidence-item-row p,
+.source-summary-row p,
 .generated-document-row p {
   margin-top: 4px;
   color: var(--muted);
@@ -263,6 +283,8 @@ h3 {
 .aud-plan-section-meta,
 .source-priority-meta,
 .extracted-content-meta,
+.evidence-item-meta,
+.source-summary-meta,
 .generated-document-meta {
   display: grid;
   gap: 14px;
@@ -275,6 +297,8 @@ h3 {
 .aud-plan-section-meta,
 .source-priority-meta,
 .extracted-content-meta,
+.evidence-item-meta,
+.source-summary-meta,
 .generated-document-meta {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -293,6 +317,89 @@ h3 {
 
 .extracted-content-meta {
   grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.evidence-index-content,
+.evidence-items-block {
+  display: grid;
+  gap: 18px;
+}
+
+.evidence-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.evidence-count-card {
+  min-height: 112px;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f7f8fa;
+}
+
+.evidence-count-card strong {
+  color: var(--text);
+  font-size: 1.5rem;
+  line-height: 1.2;
+}
+
+.evidence-count-card span {
+  color: var(--text);
+  font-weight: 700;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.evidence-count-card p {
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.evidence-items-block h3 {
+  font-size: 1rem;
+}
+
+.evidence-item-row {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.9fr);
+}
+
+.evidence-item-row h4 {
+  font-size: 1rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.evidence-item-meta {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.source-summary-group {
+  display: grid;
+  gap: 10px;
+}
+
+.source-summary-group h3 {
+  font-size: 1rem;
+}
+
+.source-summary-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.source-summary-row h4 {
+  font-size: 1rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.source-summary-meta {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .generated-document-meta {
@@ -485,6 +592,8 @@ dd {
   .job-row,
   .aud-plan-section-row,
   .extracted-content-row,
+  .evidence-item-row,
+  .source-summary-row,
   .generated-document-row,
   .project-meta,
   .file-meta,
@@ -493,6 +602,9 @@ dd {
   .aud-plan-section-meta,
   .source-priority-meta,
   .extracted-content-meta,
+  .evidence-item-meta,
+  .source-summary-meta,
+  .evidence-summary-grid,
   .generated-document-meta,
   .metadata-grid {
     grid-template-columns: 1fr;

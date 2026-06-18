@@ -403,6 +403,202 @@ def test_create_generate_aud_plan_job_returns_404_for_unknown_project(
     assert response.json()["detail"] == "Project not found."
 
 
+def test_create_enrich_document_understanding_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/jobs/enrich-document-understanding"
+    )
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "enrich_with_document_understanding"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "Document Understanding enrichment job queued."
+
+
+def test_create_enrich_document_understanding_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/projects/missing-project/jobs/enrich-document-understanding"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_create_build_evidence_index_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(f"/projects/{project_id}/jobs/build-evidence-index")
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "build_evidence_index"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "Evidence index build job queued."
+
+
+def test_create_build_evidence_index_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post("/projects/missing-project/jobs/build-evidence-index")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_create_generate_source_summaries_ai_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/jobs/generate-source-summaries-ai"
+    )
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "generate_source_summaries_ai"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "AI source summary generation job queued."
+
+
+def test_create_generate_source_summaries_ai_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/projects/missing-project/jobs/generate-source-summaries-ai"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_create_enhance_aud_plan_ai_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(f"/projects/{project_id}/jobs/enhance-aud-plan-ai")
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "enhance_aud_plan_ai"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "AI AUD plan enhancement job queued."
+
+
+def test_create_enhance_aud_plan_ai_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post("/projects/missing-project/jobs/enhance-aud-plan-ai")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_create_build_section_evidence_packs_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/jobs/build-section-evidence-packs"
+    )
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "build_section_evidence_packs"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "Section evidence pack build job queued."
+
+
+def test_create_build_section_evidence_packs_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/projects/missing-project/jobs/build-section-evidence-packs"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_create_generate_section_drafts_ai_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/jobs/generate-section-drafts-ai"
+    )
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "generate_section_drafts_ai"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "AI section draft generation job queued."
+
+
+def test_create_generate_section_drafts_ai_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post(
+        "/projects/missing-project/jobs/generate-section-drafts-ai"
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
 def test_create_extract_open_points_job(client: TestClient) -> None:
     project_response = client.post(
         "/projects",

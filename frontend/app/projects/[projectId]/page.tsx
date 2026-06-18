@@ -6,9 +6,11 @@ import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 
 import {
   formatProjectDate,
+  createBuildEvidenceIndexJob,
   createClassifyFilesJob,
   createExtractOpenPointsJob,
   createExtractAllJob,
+  createGenerateSourceSummariesAiJob,
   createGenerateAudPlanJob,
   createGenerateDocxJob,
   getAudPlan,
@@ -16,15 +18,18 @@ import {
   getProject,
   getSourcePriorityReport,
   listExtractedContent,
+  listEvidenceItems,
   listGeneratedDocuments,
   listOpenPoints,
   listProjectJobs,
   listProjectFiles,
+  listSourceSummaries,
   sourceRoleLabels,
   sourceRoles,
   uploadProjectFile,
   type AUDPlan,
   type AUDPlanJson,
+  type EvidenceItem,
   type ExtractedContent,
   type GeneratedDocument,
   type Job,
@@ -32,6 +37,7 @@ import {
   type Project,
   type SourceRole,
   type SourcePriorityReport,
+  type SourceSummary,
   type UploadedFile,
 } from "@/lib/projects";
 
@@ -48,6 +54,18 @@ type ExtractedContentJson = {
   word_count?: number;
   character_count?: number;
   metadata?: ExtractedContentMetadata;
+};
+
+type SourceSummaryJson = {
+  source_role?: string;
+  summary?: string;
+  important_topics?: string[];
+  tables_or_configurations?: string[];
+  processes?: string[];
+  screenshots_or_images_to_consider?: string[];
+  open_or_unresolved_items?: string[];
+  source_confidence?: string;
+  aud_usage_guidance?: string;
 };
 
 function parseExtractedContentJson(value: string | null): ExtractedContentJson {
@@ -78,6 +96,24 @@ function parseAudPlanJson(value: string | null): AUDPlanJson {
 
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as AUDPlanJson;
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
+}
+
+function parseSourceSummaryJson(value: string | null): SourceSummaryJson {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as SourceSummaryJson;
     }
   } catch {
     return {};
@@ -139,12 +175,72 @@ function buildEvidencePreview(value: string | null) {
     : normalizedValue;
 }
 
+type EvidenceGroupCount = {
+  evidenceType: string;
+  sourceRole: string | null;
+  count: number;
+};
+
+function buildEvidenceGroupCounts(items: EvidenceItem[]): EvidenceGroupCount[] {
+  const counts = new Map<string, EvidenceGroupCount>();
+
+  for (const item of items) {
+    const sourceRole = item.source_role || null;
+    const key = `${item.evidence_type}::${sourceRole || "unknown"}`;
+    const current = counts.get(key);
+
+    if (current) {
+      current.count += 1;
+    } else {
+      counts.set(key, {
+        evidenceType: item.evidence_type,
+        sourceRole,
+        count: 1,
+      });
+    }
+  }
+
+  return Array.from(counts.values()).sort((left, right) => {
+    if (right.count !== left.count) {
+      return right.count - left.count;
+    }
+
+    if (left.evidenceType !== right.evidenceType) {
+      return left.evidenceType.localeCompare(right.evidenceType);
+    }
+
+    return (left.sourceRole || "").localeCompare(right.sourceRole || "");
+  });
+}
+
+function buildSourceSummaryGroups(items: SourceSummary[]) {
+  const groups = new Map<string, SourceSummary[]>();
+
+  for (const item of items) {
+    groups.set(item.source_role, [...(groups.get(item.source_role) ?? []), item]);
+  }
+
+  return Array.from(groups.entries()).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+}
+
+function formatSummaryList(values: string[] | undefined) {
+  if (!values || values.length === 0) {
+    return "Not available";
+  }
+
+  return values.join(", ");
+}
+
 export default function ProjectDetailPage() {
   const params = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [extractedContents, setExtractedContents] = useState<ExtractedContent[]>([]);
+  const [evidenceItems, setEvidenceItems] = useState<EvidenceItem[]>([]);
+  const [sourceSummaries, setSourceSummaries] = useState<SourceSummary[]>([]);
   const [openPoints, setOpenPoints] = useState<OpenPoint[]>([]);
   const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocument[]>([]);
   const [audPlan, setAudPlan] = useState<AUDPlan | null>(null);
@@ -157,6 +253,8 @@ export default function ProjectDetailPage() {
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [isLoadingExtractedContent, setIsLoadingExtractedContent] = useState(true);
+  const [isLoadingEvidenceItems, setIsLoadingEvidenceItems] = useState(true);
+  const [isLoadingSourceSummaries, setIsLoadingSourceSummaries] = useState(true);
   const [isLoadingOpenPoints, setIsLoadingOpenPoints] = useState(true);
   const [isLoadingGeneratedDocuments, setIsLoadingGeneratedDocuments] = useState(true);
   const [isLoadingAudPlan, setIsLoadingAudPlan] = useState(true);
@@ -167,10 +265,22 @@ export default function ProjectDetailPage() {
   const [isCreatingAudPlanJob, setIsCreatingAudPlanJob] = useState(false);
   const [isCreatingOpenPointsJob, setIsCreatingOpenPointsJob] = useState(false);
   const [isCreatingDocxJob, setIsCreatingDocxJob] = useState(false);
+  const [isCreatingEvidenceIndexJob, setIsCreatingEvidenceIndexJob] = useState(false);
+  const [isCreatingSourceSummariesJob, setIsCreatingSourceSummariesJob] =
+    useState(false);
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(
+    {},
+  );
   const [message, setMessage] = useState<string | null>(null);
   const [fileMessage, setFileMessage] = useState<string | null>(null);
   const [jobMessage, setJobMessage] = useState<string | null>(null);
   const [extractedContentMessage, setExtractedContentMessage] = useState<string | null>(
+    null,
+  );
+  const [evidenceItemsMessage, setEvidenceItemsMessage] = useState<string | null>(
+    null,
+  );
+  const [sourceSummariesMessage, setSourceSummariesMessage] = useState<string | null>(
     null,
   );
   const [openPointsMessage, setOpenPointsMessage] = useState<string | null>(null);
@@ -221,6 +331,34 @@ export default function ProjectDetailPage() {
       setExtractedContentMessage(`Unable to load extracted content: ${detail}`);
     } finally {
       setIsLoadingExtractedContent(false);
+    }
+  }
+
+  async function refreshEvidenceItems(projectId: string) {
+    setIsLoadingEvidenceItems(true);
+    setEvidenceItemsMessage(null);
+
+    try {
+      setEvidenceItems(await listEvidenceItems(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setEvidenceItemsMessage(`Unable to load evidence items: ${detail}`);
+    } finally {
+      setIsLoadingEvidenceItems(false);
+    }
+  }
+
+  async function refreshSourceSummaries(projectId: string) {
+    setIsLoadingSourceSummaries(true);
+    setSourceSummariesMessage(null);
+
+    try {
+      setSourceSummaries(await listSourceSummaries(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setSourceSummariesMessage(`Unable to load source summaries: ${detail}`);
+    } finally {
+      setIsLoadingSourceSummaries(false);
     }
   }
 
@@ -299,6 +437,8 @@ export default function ProjectDetailPage() {
     void refreshFiles(params.projectId);
     void refreshJobs(params.projectId);
     void refreshExtractedContent(params.projectId);
+    void refreshEvidenceItems(params.projectId);
+    void refreshSourceSummaries(params.projectId);
     void refreshOpenPoints(params.projectId);
     void refreshGeneratedDocuments(params.projectId);
     void refreshAudPlan(params.projectId);
@@ -417,8 +557,78 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function handleCreateEvidenceIndexJob() {
+    setIsCreatingEvidenceIndexJob(true);
+    setEvidenceItemsMessage(null);
+
+    try {
+      await createBuildEvidenceIndexJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setEvidenceItemsMessage(
+        "Evidence index build job created. Refresh Evidence after worker processing completes.",
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setEvidenceItemsMessage(`Unable to create evidence index job: ${detail}`);
+    } finally {
+      setIsCreatingEvidenceIndexJob(false);
+    }
+  }
+
+  async function handleCreateSourceSummariesJob() {
+    setIsCreatingSourceSummariesJob(true);
+    setSourceSummariesMessage(null);
+
+    try {
+      await createGenerateSourceSummariesAiJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setSourceSummariesMessage(
+        "AI source summary job created. Refresh Source Summaries after worker processing completes.",
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setSourceSummariesMessage(
+        `Unable to create AI source summary job: ${detail}`,
+      );
+    } finally {
+      setIsCreatingSourceSummariesJob(false);
+    }
+  }
+
+  function isSectionExpanded(sectionKey: string) {
+    return expandedSections[sectionKey] ?? false;
+  }
+
+  function toggleSection(sectionKey: string) {
+    setExpandedSections((current) => ({
+      ...current,
+      [sectionKey]: !(current[sectionKey] ?? false),
+    }));
+  }
+
   const audPlanJson = parseAudPlanJson(audPlan?.plan_json ?? null);
   const plannedSections = audPlanJson.sections ?? [];
+  const evidenceGroupCounts = buildEvidenceGroupCounts(evidenceItems);
+  const sourceSummaryGroups = buildSourceSummaryGroups(sourceSummaries);
+  const topEvidenceItems = [...evidenceItems]
+    .sort((left, right) => {
+      if (right.priority !== left.priority) {
+        return right.priority - left.priority;
+      }
+
+      return (left.created_at || "").localeCompare(right.created_at || "");
+    })
+    .slice(0, 10);
+  const renderSectionToggle = (sectionKey: string) => (
+    <button
+      type="button"
+      className="secondary-button section-toggle-button"
+      onClick={() => toggleSection(sectionKey)}
+      aria-expanded={isSectionExpanded(sectionKey)}
+    >
+      {isSectionExpanded(sectionKey) ? "Collapse" : "Expand"}
+    </button>
+  );
 
   return (
     <main className="page-shell workspace-page">
@@ -441,105 +651,127 @@ export default function ProjectDetailPage() {
             <section className="panel" aria-labelledby="metadata-title">
               <div className="section-heading">
                 <h2 id="metadata-title">Project Metadata</h2>
+                {renderSectionToggle("metadata")}
               </div>
 
-              <dl className="metadata-grid">
-                <div>
-                  <dt>Customer Name</dt>
-                  <dd>{project.customer_name || "Not available"}</dd>
+              {isSectionExpanded("metadata") ? (
+                <div className="panel-content">
+                  <dl className="metadata-grid">
+                    <div>
+                      <dt>Customer Name</dt>
+                      <dd>{project.customer_name || "Not available"}</dd>
+                    </div>
+                    <div>
+                      <dt>Module Name</dt>
+                      <dd>{project.module_name || "Not available"}</dd>
+                    </div>
+                    <div>
+                      <dt>Author Name</dt>
+                      <dd>{project.name || "Not available"}</dd>
+                    </div>
+                    <div>
+                      <dt>Email Id</dt>
+                      <dd>{project.email_id || "Not available"}</dd>
+                    </div>
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{project.status}</dd>
+                    </div>
+                    <div>
+                      <dt>Created</dt>
+                      <dd>{formatProjectDate(project.created_at)}</dd>
+                    </div>
+                  </dl>
                 </div>
-                <div>
-                  <dt>Module Name</dt>
-                  <dd>{project.module_name || "Not available"}</dd>
-                </div>
-                <div>
-                  <dt>Author Name</dt>
-                  <dd>{project.name || "Not available"}</dd>
-                </div>
-                <div>
-                  <dt>Email Id</dt>
-                  <dd>{project.email_id || "Not available"}</dd>
-                </div>
-                <div>
-                  <dt>Status</dt>
-                  <dd>{project.status}</dd>
-                </div>
-                <div>
-                  <dt>Created</dt>
-                  <dd>{formatProjectDate(project.created_at)}</dd>
-                </div>
-              </dl>
+              ) : null}
             </section>
 
             <section className="panel" aria-labelledby="uploaded-files-title">
               <div className="section-heading">
                 <h2 id="uploaded-files-title">Uploaded Files</h2>
+                {renderSectionToggle("uploaded-files")}
               </div>
 
-              <form className="upload-form" onSubmit={handleUpload}>
-                <label>
-                  <span>Source Role</span>
-                  <select
-                    value={sourceRole}
-                    onChange={(event) => setSourceRole(event.target.value as SourceRole)}
-                  >
-                    {sourceRoles.map((role) => (
-                      <option key={role} value={role}>
-                        {sourceRoleLabels[role]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              {isSectionExpanded("uploaded-files") ? (
+                <div className="panel-content">
+                  <form className="upload-form" onSubmit={handleUpload}>
+                    <label>
+                      <span>Source Role</span>
+                      <select
+                        value={sourceRole}
+                        onChange={(event) =>
+                          setSourceRole(event.target.value as SourceRole)
+                        }
+                      >
+                        {sourceRoles.map((role) => (
+                          <option key={role} value={role}>
+                            {sourceRoleLabels[role]}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
 
-                <label>
-                  <span>File</span>
-                  <input key={fileInputKey} type="file" onChange={handleFileChange} />
-                </label>
+                    <label>
+                      <span>File</span>
+                      <input
+                        key={fileInputKey}
+                        type="file"
+                        onChange={handleFileChange}
+                      />
+                    </label>
 
-                <div className="form-actions">
-                  <button type="submit" className="primary-button" disabled={isUploading}>
-                    {isUploading ? "Uploading..." : "Upload File"}
-                  </button>
-                </div>
-              </form>
-
-              {fileMessage ? <p className="status-message">{fileMessage}</p> : null}
-
-              {isLoadingFiles ? <p className="muted-text">Loading uploaded files...</p> : null}
-
-              {!isLoadingFiles && uploadedFiles.length === 0 ? (
-                <p className="muted-text">No files uploaded yet.</p>
-              ) : null}
-
-              <div className="file-list">
-                {uploadedFiles.map((uploadedFile) => (
-                  <article key={uploadedFile.id} className="file-row">
-                    <div>
-                      <h3>{uploadedFile.original_filename}</h3>
-                      <p>{uploadedFile.storage_path}</p>
+                    <div className="form-actions">
+                      <button
+                        type="submit"
+                        className="primary-button"
+                        disabled={isUploading}
+                      >
+                        {isUploading ? "Uploading..." : "Upload File"}
+                      </button>
                     </div>
+                  </form>
 
-                    <dl className="file-meta">
-                      <div>
-                        <dt>Source Role</dt>
-                        <dd>
-                          {uploadedFile.source_role
-                            ? sourceRoleLabels[uploadedFile.source_role]
-                            : sourceRoleLabels.unknown}
-                        </dd>
-                      </div>
-                      <div>
-                        <dt>File Type</dt>
-                        <dd>{uploadedFile.file_type || "Not available"}</dd>
-                      </div>
-                      <div>
-                        <dt>Created</dt>
-                        <dd>{formatProjectDate(uploadedFile.created_at)}</dd>
-                      </div>
-                    </dl>
-                  </article>
-                ))}
-              </div>
+                  {fileMessage ? <p className="status-message">{fileMessage}</p> : null}
+
+                  {isLoadingFiles ? (
+                    <p className="muted-text">Loading uploaded files...</p>
+                  ) : null}
+
+                  {!isLoadingFiles && uploadedFiles.length === 0 ? (
+                    <p className="muted-text">No files uploaded yet.</p>
+                  ) : null}
+
+                  <div className="file-list">
+                    {uploadedFiles.map((uploadedFile) => (
+                      <article key={uploadedFile.id} className="file-row">
+                        <div>
+                          <h3>{uploadedFile.original_filename}</h3>
+                          <p>{uploadedFile.storage_path}</p>
+                        </div>
+
+                        <dl className="file-meta">
+                          <div>
+                            <dt>Source Role</dt>
+                            <dd>
+                              {uploadedFile.source_role
+                                ? sourceRoleLabels[uploadedFile.source_role]
+                                : sourceRoleLabels.unknown}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>File Type</dt>
+                            <dd>{uploadedFile.file_type || "Not available"}</dd>
+                          </div>
+                          <div>
+                            <dt>Created</dt>
+                            <dd>{formatProjectDate(uploadedFile.created_at)}</dd>
+                          </div>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </section>
 
             <section className="panel" aria-labelledby="jobs-title">
@@ -551,87 +783,93 @@ export default function ProjectDetailPage() {
                   </p>
                 </div>
 
-                <div className="button-group">
-                  <button
-                    type="button"
-                    className="primary-button"
-                    onClick={handleCreateExtractAllJob}
-                    disabled={isCreatingExtractAllJob}
-                  >
-                    {isCreatingExtractAllJob ? "Creating..." : "Extract All Files"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={handleCreateAudPlanJob}
-                    disabled={isCreatingAudPlanJob}
-                  >
-                    {isCreatingAudPlanJob ? "Creating..." : "Generate AUD Plan"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={handleCreateOpenPointsJob}
-                    disabled={isCreatingOpenPointsJob}
-                  >
-                    {isCreatingOpenPointsJob ? "Creating..." : "Extract Open Points"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={handleCreateClassifyJob}
-                    disabled={isCreatingJob}
-                  >
-                    {isCreatingJob ? "Creating..." : "Classify Files"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => refreshJobs(params.projectId)}
-                    disabled={isLoadingJobs}
-                  >
-                    Refresh Jobs
-                  </button>
+                {renderSectionToggle("jobs")}
+              </div>
+
+              {isSectionExpanded("jobs") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleCreateExtractAllJob}
+                      disabled={isCreatingExtractAllJob}
+                    >
+                      {isCreatingExtractAllJob ? "Creating..." : "Extract All Files"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleCreateAudPlanJob}
+                      disabled={isCreatingAudPlanJob}
+                    >
+                      {isCreatingAudPlanJob ? "Creating..." : "Generate AUD Plan"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleCreateOpenPointsJob}
+                      disabled={isCreatingOpenPointsJob}
+                    >
+                      {isCreatingOpenPointsJob ? "Creating..." : "Extract Open Points"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={handleCreateClassifyJob}
+                      disabled={isCreatingJob}
+                    >
+                      {isCreatingJob ? "Creating..." : "Classify Files"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshJobs(params.projectId)}
+                      disabled={isLoadingJobs}
+                    >
+                      Refresh Jobs
+                    </button>
+                  </div>
+
+                  {jobMessage ? <p className="status-message">{jobMessage}</p> : null}
+
+                  {isLoadingJobs ? <p className="muted-text">Loading jobs...</p> : null}
+
+                  {!isLoadingJobs && jobs.length === 0 ? (
+                    <p className="muted-text">No jobs yet.</p>
+                  ) : null}
+
+                  <div className="job-list">
+                    {jobs.map((job) => (
+                      <article key={job.id} className="job-row">
+                        <div>
+                          <h3>{job.job_type}</h3>
+                          <p>{job.message || "No message"}</p>
+                        </div>
+
+                        <dl className="job-meta">
+                          <div>
+                            <dt>Status</dt>
+                            <dd>{job.status}</dd>
+                          </div>
+                          <div>
+                            <dt>Progress</dt>
+                            <dd>{job.progress}%</dd>
+                          </div>
+                          <div>
+                            <dt>Created</dt>
+                            <dd>{formatProjectDate(job.created_at)}</dd>
+                          </div>
+                          <div>
+                            <dt>Updated</dt>
+                            <dd>{formatProjectDate(job.updated_at)}</dd>
+                          </div>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
                 </div>
-              </div>
-
-              {jobMessage ? <p className="status-message">{jobMessage}</p> : null}
-
-              {isLoadingJobs ? <p className="muted-text">Loading jobs...</p> : null}
-
-              {!isLoadingJobs && jobs.length === 0 ? (
-                <p className="muted-text">No jobs yet.</p>
               ) : null}
-
-              <div className="job-list">
-                {jobs.map((job) => (
-                  <article key={job.id} className="job-row">
-                    <div>
-                      <h3>{job.job_type}</h3>
-                      <p>{job.message || "No message"}</p>
-                    </div>
-
-                    <dl className="job-meta">
-                      <div>
-                        <dt>Status</dt>
-                        <dd>{job.status}</dd>
-                      </div>
-                      <div>
-                        <dt>Progress</dt>
-                        <dd>{job.progress}%</dd>
-                      </div>
-                      <div>
-                        <dt>Created</dt>
-                        <dd>{formatProjectDate(job.created_at)}</dd>
-                      </div>
-                      <div>
-                        <dt>Updated</dt>
-                        <dd>{formatProjectDate(job.updated_at)}</dd>
-                      </div>
-                    </dl>
-                  </article>
-                ))}
-              </div>
             </section>
 
             <section className="panel" aria-labelledby="aud-plan-title">
@@ -643,89 +881,104 @@ export default function ProjectDetailPage() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => refreshAudPlan(params.projectId)}
-                  disabled={isLoadingAudPlan}
-                >
-                  Refresh AUD Plan
-                </button>
+                {renderSectionToggle("aud-plan")}
               </div>
 
-              {audPlanMessage ? <p className="status-message">{audPlanMessage}</p> : null}
+              {isSectionExpanded("aud-plan") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshAudPlan(params.projectId)}
+                      disabled={isLoadingAudPlan}
+                    >
+                      Refresh AUD Plan
+                    </button>
+                  </div>
 
-              {isLoadingAudPlan ? <p className="muted-text">Loading AUD plan...</p> : null}
-
-              {!isLoadingAudPlan && !audPlan ? (
-                <p className="muted-text">No AUD plan generated yet.</p>
-              ) : null}
-
-              {!isLoadingAudPlan && audPlan ? (
-                <div className="aud-plan-content">
-                  <dl className="aud-plan-meta">
-                    <div>
-                      <dt>Status</dt>
-                      <dd>{audPlan.status}</dd>
-                    </div>
-                    <div>
-                      <dt>Default Template Required</dt>
-                      <dd>
-                        {typeof audPlanJson.default_template_required === "boolean"
-                          ? audPlanJson.default_template_required
-                            ? "Yes"
-                            : "No"
-                          : "Not available"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Updated</dt>
-                      <dd>{formatProjectDate(audPlan.updated_at)}</dd>
-                    </div>
-                  </dl>
-
-                  {plannedSections.length === 0 ? (
-                    <p className="muted-text">No planned sections available.</p>
+                  {audPlanMessage ? (
+                    <p className="status-message">{audPlanMessage}</p>
                   ) : null}
 
-                  <div className="aud-plan-section-list">
-                    {plannedSections.map((section) => (
-                      <article key={section.section_id} className="aud-plan-section-row">
+                  {isLoadingAudPlan ? (
+                    <p className="muted-text">Loading AUD plan...</p>
+                  ) : null}
+
+                  {!isLoadingAudPlan && !audPlan ? (
+                    <p className="muted-text">No AUD plan generated yet.</p>
+                  ) : null}
+
+                  {!isLoadingAudPlan && audPlan ? (
+                    <div className="aud-plan-content">
+                      <dl className="aud-plan-meta">
                         <div>
-                          <h3>{section.title}</h3>
-                          <p>{section.section_id}</p>
+                          <dt>Status</dt>
+                          <dd>{audPlan.status}</dd>
                         </div>
-
-                        <dl className="aud-plan-section-meta">
-                          <div>
-                            <dt>Confidence</dt>
-                            <dd>{section.confidence}</dd>
-                          </div>
-                          <div>
-                            <dt>Include in AUD</dt>
-                            <dd>{section.include_in_aud ? "Yes" : "No"}</dd>
-                          </div>
-                          <div>
-                            <dt>Source Role Basis</dt>
-                            <dd>{formatPrioritySource(section.source_role_basis)}</dd>
-                          </div>
-                        </dl>
-
-                        <div className="aud-plan-notes">
-                          <h4>Notes</h4>
-                          {section.notes.length > 0 ? (
-                            <ul>
-                              {section.notes.map((note) => (
-                                <li key={note}>{note}</li>
-                              ))}
-                            </ul>
-                          ) : (
-                            <p className="muted-text">No notes.</p>
-                          )}
+                        <div>
+                          <dt>Default Template Required</dt>
+                          <dd>
+                            {typeof audPlanJson.default_template_required === "boolean"
+                              ? audPlanJson.default_template_required
+                                ? "Yes"
+                                : "No"
+                              : "Not available"}
+                          </dd>
                         </div>
-                      </article>
-                    ))}
-                  </div>
+                        <div>
+                          <dt>Updated</dt>
+                          <dd>{formatProjectDate(audPlan.updated_at)}</dd>
+                        </div>
+                      </dl>
+
+                      {plannedSections.length === 0 ? (
+                        <p className="muted-text">No planned sections available.</p>
+                      ) : null}
+
+                      <div className="aud-plan-section-list">
+                        {plannedSections.map((section) => (
+                          <article
+                            key={section.section_id}
+                            className="aud-plan-section-row"
+                          >
+                            <div>
+                              <h3>{section.title}</h3>
+                              <p>{section.section_id}</p>
+                            </div>
+
+                            <dl className="aud-plan-section-meta">
+                              <div>
+                                <dt>Confidence</dt>
+                                <dd>{section.confidence}</dd>
+                              </div>
+                              <div>
+                                <dt>Include in AUD</dt>
+                                <dd>{section.include_in_aud ? "Yes" : "No"}</dd>
+                              </div>
+                              <div>
+                                <dt>Source Role Basis</dt>
+                                <dd>{formatPrioritySource(section.source_role_basis)}</dd>
+                              </div>
+                            </dl>
+
+                            <div className="aud-plan-notes">
+                              <h4>Notes</h4>
+                              {section.notes.length > 0 ? (
+                                <ul>
+                                  {section.notes.map((note) => (
+                                    <li key={note}>{note}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <p className="muted-text">No notes.</p>
+                              )}
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </section>
@@ -739,52 +992,60 @@ export default function ProjectDetailPage() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => refreshOpenPoints(params.projectId)}
-                  disabled={isLoadingOpenPoints}
-                >
-                  Refresh Open Points
-                </button>
+                {renderSectionToggle("open-points")}
               </div>
 
-              {openPointsMessage ? (
-                <p className="status-message">{openPointsMessage}</p>
-              ) : null}
+              {isSectionExpanded("open-points") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshOpenPoints(params.projectId)}
+                      disabled={isLoadingOpenPoints}
+                    >
+                      Refresh Open Points
+                    </button>
+                  </div>
 
-              {isLoadingOpenPoints ? (
-                <p className="muted-text">Loading open points...</p>
-              ) : null}
+                  {openPointsMessage ? (
+                    <p className="status-message">{openPointsMessage}</p>
+                  ) : null}
 
-              {!isLoadingOpenPoints && openPoints.length === 0 ? (
-                <p className="muted-text">No open points extracted yet.</p>
-              ) : null}
+                  {isLoadingOpenPoints ? (
+                    <p className="muted-text">Loading open points...</p>
+                  ) : null}
 
-              {!isLoadingOpenPoints && openPoints.length > 0 ? (
-                <div className="open-points-table-wrap">
-                  <table className="open-points-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">#</th>
-                        <th scope="col">Topic</th>
-                        <th scope="col">Question</th>
-                        <th scope="col">Status</th>
-                        <th scope="col">Evidence Preview</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {openPoints.map((openPoint, index) => (
-                        <tr key={openPoint.id}>
-                          <td>{index + 1}</td>
-                          <td>{openPoint.topic}</td>
-                          <td>{openPoint.question}</td>
-                          <td>{openPoint.status}</td>
-                          <td>{buildEvidencePreview(openPoint.evidence)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  {!isLoadingOpenPoints && openPoints.length === 0 ? (
+                    <p className="muted-text">No open points extracted yet.</p>
+                  ) : null}
+
+                  {!isLoadingOpenPoints && openPoints.length > 0 ? (
+                    <div className="open-points-table-wrap">
+                      <table className="open-points-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">#</th>
+                            <th scope="col">Topic</th>
+                            <th scope="col">Question</th>
+                            <th scope="col">Status</th>
+                            <th scope="col">Evidence Preview</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {openPoints.map((openPoint, index) => (
+                            <tr key={openPoint.id}>
+                              <td>{index + 1}</td>
+                              <td>{openPoint.topic}</td>
+                              <td>{openPoint.question}</td>
+                              <td>{openPoint.status}</td>
+                              <td>{buildEvidencePreview(openPoint.evidence)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </section>
@@ -798,91 +1059,321 @@ export default function ProjectDetailPage() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => refreshSourcePriority(params.projectId)}
-                  disabled={isLoadingSourcePriority}
-                >
-                  Refresh Source Priority
-                </button>
+                {renderSectionToggle("source-priority")}
               </div>
 
-              {sourcePriorityMessage ? (
-                <p className="status-message">{sourcePriorityMessage}</p>
+              {isSectionExpanded("source-priority") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshSourcePriority(params.projectId)}
+                      disabled={isLoadingSourcePriority}
+                    >
+                      Refresh Source Priority
+                    </button>
+                  </div>
+
+                  {sourcePriorityMessage ? (
+                    <p className="status-message">{sourcePriorityMessage}</p>
+                  ) : null}
+
+                  {isLoadingSourcePriority ? (
+                    <p className="muted-text">Loading source priority...</p>
+                  ) : null}
+
+                  {!isLoadingSourcePriority && sourcePriorityReport ? (
+                    <div className="source-priority-content">
+                      <dl className="source-priority-meta">
+                        <div>
+                          <dt>Explicit Template</dt>
+                          <dd>
+                            {sourcePriorityReport.has_explicit_template ? "Yes" : "No"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>FDD Golden Source</dt>
+                          <dd>
+                            {sourcePriorityReport.golden_source_files.length > 0
+                              ? "Yes"
+                              : "No"}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Default SCM Template Needed</dt>
+                          <dd>
+                            {sourcePriorityReport.recommended_default_template_needed
+                              ? "Yes"
+                              : "No"}
+                          </dd>
+                        </div>
+                      </dl>
+
+                      <div className="source-priority-block">
+                        <h3>Source Roles Present</h3>
+                        <p>
+                          {sourcePriorityReport.source_roles_present.length > 0
+                            ? sourcePriorityReport.source_roles_present
+                                .map((role) => formatSourceRole(role))
+                                .join(", ")
+                            : "Not available"}
+                        </p>
+                      </div>
+
+                      <div className="source-priority-block">
+                        <h3>Priority Order</h3>
+                        {sourcePriorityReport.priority_order.length > 0 ? (
+                          <ol className="priority-list">
+                            {sourcePriorityReport.priority_order.map((item) => (
+                              <li key={`${item.priority}-${item.source}`}>
+                                <strong>{formatPrioritySource(item.source)}</strong>
+                                <span>{item.purpose}</span>
+                                <p>{item.rule}</p>
+                              </li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <p className="muted-text">No priority order available.</p>
+                        )}
+                      </div>
+
+                      <div className="source-priority-block">
+                        <h3>Warnings</h3>
+                        {sourcePriorityReport.warnings.length > 0 ? (
+                          <ul className="warning-list">
+                            {sourcePriorityReport.warnings.map((warning) => (
+                              <li key={warning}>{warning}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="muted-text">No warnings.</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
+            </section>
 
-              {isLoadingSourcePriority ? (
-                <p className="muted-text">Loading source priority...</p>
+            <section className="panel" aria-labelledby="evidence-index-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="evidence-index-title">Evidence Index</h2>
+                  <p className="muted-text">
+                    Review normalized evidence packets for future AUD planning and drafting.
+                  </p>
+                </div>
+
+                {renderSectionToggle("evidence-index")}
+              </div>
+
+              {isSectionExpanded("evidence-index") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleCreateEvidenceIndexJob}
+                      disabled={isCreatingEvidenceIndexJob}
+                    >
+                      {isCreatingEvidenceIndexJob
+                        ? "Creating..."
+                        : "Build Evidence Index"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshEvidenceItems(params.projectId)}
+                      disabled={isLoadingEvidenceItems}
+                    >
+                      Refresh Evidence
+                    </button>
+                  </div>
+
+                  {evidenceItemsMessage ? (
+                    <p className="status-message">{evidenceItemsMessage}</p>
+                  ) : null}
+
+                  {isLoadingEvidenceItems ? (
+                    <p className="muted-text">Loading evidence index...</p>
+                  ) : null}
+
+                  {!isLoadingEvidenceItems && evidenceItems.length === 0 ? (
+                    <p className="muted-text">No evidence items built yet.</p>
+                  ) : null}
+
+                  {!isLoadingEvidenceItems && evidenceItems.length > 0 ? (
+                    <div className="evidence-index-content">
+                      <div className="evidence-summary-grid" aria-label="Evidence counts">
+                        {evidenceGroupCounts.map((group) => (
+                          <article
+                            key={`${group.evidenceType}-${group.sourceRole || "unknown"}`}
+                            className="evidence-count-card"
+                          >
+                            <strong>{group.count}</strong>
+                            <span>{group.evidenceType}</span>
+                            <p>{formatSourceRole(group.sourceRole)}</p>
+                          </article>
+                        ))}
+                      </div>
+
+                      <div className="evidence-items-block">
+                        <h3>Top Evidence Items</h3>
+
+                        <div className="evidence-item-list">
+                          {topEvidenceItems.map((item) => (
+                            <article key={item.id} className="evidence-item-row">
+                              <div>
+                                <h4>{item.title || "Untitled evidence item"}</h4>
+                                <p>{buildEvidencePreview(item.text)}</p>
+                              </div>
+
+                              <dl className="evidence-item-meta">
+                                <div>
+                                  <dt>Evidence Type</dt>
+                                  <dd>{item.evidence_type}</dd>
+                                </div>
+                                <div>
+                                  <dt>Source Role</dt>
+                                  <dd>{formatSourceRole(item.source_role)}</dd>
+                                </div>
+                                <div>
+                                  <dt>Priority</dt>
+                                  <dd>{item.priority}</dd>
+                                </div>
+                                <div>
+                                  <dt>Confidence</dt>
+                                  <dd>{item.confidence}</dd>
+                                </div>
+                              </dl>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
+            </section>
 
-              {!isLoadingSourcePriority && sourcePriorityReport ? (
-                <div className="source-priority-content">
-                  <dl className="source-priority-meta">
-                    <div>
-                      <dt>Explicit Template</dt>
-                      <dd>
-                        {sourcePriorityReport.has_explicit_template ? "Yes" : "No"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>FDD Golden Source</dt>
-                      <dd>
-                        {sourcePriorityReport.golden_source_files.length > 0
-                          ? "Yes"
-                          : "No"}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt>Default SCM Template Needed</dt>
-                      <dd>
-                        {sourcePriorityReport.recommended_default_template_needed
-                          ? "Yes"
-                          : "No"}
-                      </dd>
-                    </div>
-                  </dl>
+            <section className="panel" aria-labelledby="source-summaries-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="source-summaries-title">Source Summaries</h2>
+                  <p className="muted-text">
+                    Review AI summaries grouped by source role before later AUD refinement.
+                  </p>
+                </div>
 
-                  <div className="source-priority-block">
-                    <h3>Source Roles Present</h3>
-                    <p>
-                      {sourcePriorityReport.source_roles_present.length > 0
-                        ? sourcePriorityReport.source_roles_present
-                            .map((role) => formatSourceRole(role))
-                            .join(", ")
-                        : "Not available"}
-                    </p>
+                {renderSectionToggle("source-summaries")}
+              </div>
+
+              {isSectionExpanded("source-summaries") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleCreateSourceSummariesJob}
+                      disabled={isCreatingSourceSummariesJob}
+                    >
+                      {isCreatingSourceSummariesJob
+                        ? "Creating..."
+                        : "Generate AI Source Summaries"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshSourceSummaries(params.projectId)}
+                      disabled={isLoadingSourceSummaries}
+                    >
+                      Refresh Source Summaries
+                    </button>
                   </div>
 
-                  <div className="source-priority-block">
-                    <h3>Priority Order</h3>
-                    {sourcePriorityReport.priority_order.length > 0 ? (
-                      <ol className="priority-list">
-                        {sourcePriorityReport.priority_order.map((item) => (
-                          <li key={`${item.priority}-${item.source}`}>
-                            <strong>{formatPrioritySource(item.source)}</strong>
-                            <span>{item.purpose}</span>
-                            <p>{item.rule}</p>
-                          </li>
-                        ))}
-                      </ol>
-                    ) : (
-                      <p className="muted-text">No priority order available.</p>
-                    )}
-                  </div>
+                  {sourceSummariesMessage ? (
+                    <p className="status-message">{sourceSummariesMessage}</p>
+                  ) : null}
 
-                  <div className="source-priority-block">
-                    <h3>Warnings</h3>
-                    {sourcePriorityReport.warnings.length > 0 ? (
-                      <ul className="warning-list">
-                        {sourcePriorityReport.warnings.map((warning) => (
-                          <li key={warning}>{warning}</li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="muted-text">No warnings.</p>
-                    )}
-                  </div>
+                  {isLoadingSourceSummaries ? (
+                    <p className="muted-text">Loading source summaries...</p>
+                  ) : null}
+
+                  {!isLoadingSourceSummaries && sourceSummaries.length === 0 ? (
+                    <p className="muted-text">No source summaries generated yet.</p>
+                  ) : null}
+
+                  {!isLoadingSourceSummaries && sourceSummaries.length > 0 ? (
+                    <div className="source-summary-group-list">
+                      {sourceSummaryGroups.map(([role, summaries]) => (
+                        <section key={role} className="source-summary-group">
+                          <h3>{formatSourceRole(role)}</h3>
+
+                          <div className="source-summary-list">
+                            {summaries.map((summary) => {
+                              const summaryJson = parseSourceSummaryJson(
+                                summary.summary_json,
+                              );
+
+                              return (
+                                <article
+                                  key={summary.id}
+                                  className="source-summary-row"
+                                >
+                                  <div>
+                                    <h4>{summary.summary_type}</h4>
+                                    <p>{summary.summary_text}</p>
+                                  </div>
+
+                                  <dl className="source-summary-meta">
+                                    <div>
+                                      <dt>Source Role</dt>
+                                      <dd>{formatSourceRole(summary.source_role)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Summary Type</dt>
+                                      <dd>{summary.summary_type}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Confidence</dt>
+                                      <dd>
+                                        {summaryJson.source_confidence ||
+                                          "Not available"}
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>Important Topics</dt>
+                                      <dd>
+                                        {formatSummaryList(
+                                          summaryJson.important_topics,
+                                        )}
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>Usage Guidance</dt>
+                                      <dd>
+                                        {summaryJson.aud_usage_guidance ||
+                                          "Not available"}
+                                      </dd>
+                                    </div>
+                                    <div>
+                                      <dt>Open / Unresolved Items</dt>
+                                      <dd>
+                                        {formatSummaryList(
+                                          summaryJson.open_or_unresolved_items,
+                                        )}
+                                      </dd>
+                                    </div>
+                                  </dl>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </section>
@@ -896,68 +1387,78 @@ export default function ProjectDetailPage() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={() => refreshExtractedContent(params.projectId)}
-                  disabled={isLoadingExtractedContent}
-                >
-                  Refresh Extracted Content
-                </button>
+                {renderSectionToggle("extracted-content")}
               </div>
 
-              {extractedContentMessage ? (
-                <p className="status-message">{extractedContentMessage}</p>
+              {isSectionExpanded("extracted-content") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshExtractedContent(params.projectId)}
+                      disabled={isLoadingExtractedContent}
+                    >
+                      Refresh Extracted Content
+                    </button>
+                  </div>
+
+                  {extractedContentMessage ? (
+                    <p className="status-message">{extractedContentMessage}</p>
+                  ) : null}
+
+                  {isLoadingExtractedContent ? (
+                    <p className="muted-text">Loading extracted content...</p>
+                  ) : null}
+
+                  {!isLoadingExtractedContent && extractedContents.length === 0 ? (
+                    <p className="muted-text">No extracted content yet.</p>
+                  ) : null}
+
+                  <div className="extracted-content-list">
+                    {extractedContents.map((content) => {
+                      const jsonContent = parseExtractedContentJson(
+                        content.json_content,
+                      );
+
+                      return (
+                        <article key={content.id} className="extracted-content-row">
+                          <div>
+                            <h3>{content.title || "Untitled extracted content"}</h3>
+                            <p>{content.content_type}</p>
+                          </div>
+
+                          <dl className="extracted-content-meta">
+                            <div>
+                              <dt>Created</dt>
+                              <dd>{formatProjectDate(content.created_at)}</dd>
+                            </div>
+                            <div>
+                              <dt>Source Role</dt>
+                              <dd>{formatSourceRole(jsonContent.source_role)}</dd>
+                            </div>
+                            <div>
+                              <dt>Golden Source</dt>
+                              <dd>{jsonContent.is_golden_source ? "Yes" : "No"}</dd>
+                            </div>
+                            <div>
+                              <dt>Counts</dt>
+                              <dd>{buildCountSummary(jsonContent)}</dd>
+                            </div>
+                          </dl>
+
+                          {content.text_content ? (
+                            <details className="content-preview">
+                              <summary>Preview</summary>
+                              <pre>{content.text_content}</pre>
+                            </details>
+                          ) : null}
+                        </article>
+                      );
+                    })}
+                  </div>
+                </div>
               ) : null}
-
-              {isLoadingExtractedContent ? (
-                <p className="muted-text">Loading extracted content...</p>
-              ) : null}
-
-              {!isLoadingExtractedContent && extractedContents.length === 0 ? (
-                <p className="muted-text">No extracted content yet.</p>
-              ) : null}
-
-              <div className="extracted-content-list">
-                {extractedContents.map((content) => {
-                  const jsonContent = parseExtractedContentJson(content.json_content);
-
-                  return (
-                    <article key={content.id} className="extracted-content-row">
-                      <div>
-                        <h3>{content.title || "Untitled extracted content"}</h3>
-                        <p>{content.content_type}</p>
-                      </div>
-
-                      <dl className="extracted-content-meta">
-                        <div>
-                          <dt>Created</dt>
-                          <dd>{formatProjectDate(content.created_at)}</dd>
-                        </div>
-                        <div>
-                          <dt>Source Role</dt>
-                          <dd>{formatSourceRole(jsonContent.source_role)}</dd>
-                        </div>
-                        <div>
-                          <dt>Golden Source</dt>
-                          <dd>{jsonContent.is_golden_source ? "Yes" : "No"}</dd>
-                        </div>
-                        <div>
-                          <dt>Counts</dt>
-                          <dd>{buildCountSummary(jsonContent)}</dd>
-                        </div>
-                      </dl>
-
-                      {content.text_content ? (
-                        <details className="content-preview">
-                          <summary>Preview</summary>
-                          <pre>{content.text_content}</pre>
-                        </details>
-                      ) : null}
-                    </article>
-                  );
-                })}
-              </div>
             </section>
 
             <section className="panel" aria-labelledby="generated-documents-title">
@@ -969,69 +1470,75 @@ export default function ProjectDetailPage() {
                   </p>
                 </div>
 
-                <div className="button-group">
-                  <button
-                    type="button"
-                    className="primary-button"
-                    onClick={handleCreateDocxJob}
-                    disabled={isCreatingDocxJob}
-                  >
-                    {isCreatingDocxJob ? "Creating..." : "Generate DOCX"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-button"
-                    onClick={() => refreshGeneratedDocuments(params.projectId)}
-                    disabled={isLoadingGeneratedDocuments}
-                  >
-                    Refresh Documents
-                  </button>
+                {renderSectionToggle("generated-documents")}
+              </div>
+
+              {isSectionExpanded("generated-documents") ? (
+                <div className="panel-content">
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleCreateDocxJob}
+                      disabled={isCreatingDocxJob}
+                    >
+                      {isCreatingDocxJob ? "Creating..." : "Generate DOCX"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshGeneratedDocuments(params.projectId)}
+                      disabled={isLoadingGeneratedDocuments}
+                    >
+                      Refresh Documents
+                    </button>
+                  </div>
+
+                  {generatedDocumentsMessage ? (
+                    <p className="status-message">{generatedDocumentsMessage}</p>
+                  ) : null}
+
+                  {isLoadingGeneratedDocuments ? (
+                    <p className="muted-text">Loading generated documents...</p>
+                  ) : null}
+
+                  {!isLoadingGeneratedDocuments && generatedDocuments.length === 0 ? (
+                    <p className="muted-text">No generated documents yet.</p>
+                  ) : null}
+
+                  <div className="generated-document-list">
+                    {generatedDocuments.map((document) => (
+                      <article key={document.id} className="generated-document-row">
+                        <div>
+                          <h3>{document.filename}</h3>
+                          <p>{document.document_type}</p>
+                        </div>
+
+                        <dl className="generated-document-meta">
+                          <div>
+                            <dt>Created</dt>
+                            <dd>{formatProjectDate(document.created_at)}</dd>
+                          </div>
+                          <div>
+                            <dt>Download</dt>
+                            <dd>
+                              <a
+                                className="download-link"
+                                href={getGeneratedDocumentDownloadUrl(
+                                  params.projectId,
+                                  document.id,
+                                )}
+                              >
+                                Download DOCX
+                              </a>
+                            </dd>
+                          </div>
+                        </dl>
+                      </article>
+                    ))}
+                  </div>
                 </div>
-              </div>
-
-              {generatedDocumentsMessage ? (
-                <p className="status-message">{generatedDocumentsMessage}</p>
               ) : null}
-
-              {isLoadingGeneratedDocuments ? (
-                <p className="muted-text">Loading generated documents...</p>
-              ) : null}
-
-              {!isLoadingGeneratedDocuments && generatedDocuments.length === 0 ? (
-                <p className="muted-text">No generated documents yet.</p>
-              ) : null}
-
-              <div className="generated-document-list">
-                {generatedDocuments.map((document) => (
-                  <article key={document.id} className="generated-document-row">
-                    <div>
-                      <h3>{document.filename}</h3>
-                      <p>{document.document_type}</p>
-                    </div>
-
-                    <dl className="generated-document-meta">
-                      <div>
-                        <dt>Created</dt>
-                        <dd>{formatProjectDate(document.created_at)}</dd>
-                      </div>
-                      <div>
-                        <dt>Download</dt>
-                        <dd>
-                          <a
-                            className="download-link"
-                            href={getGeneratedDocumentDownloadUrl(
-                              params.projectId,
-                              document.id,
-                            )}
-                          >
-                            Download DOCX
-                          </a>
-                        </dd>
-                      </div>
-                    </dl>
-                  </article>
-                ))}
-              </div>
             </section>
           </>
         ) : null}

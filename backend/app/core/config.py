@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,31 @@ class Settings(BaseSettings):
     OCI_SPEECH_LANGUAGE_CODE: str = "en"
     OCI_SPEECH_TIMEOUT_SECONDS: int = 1800
     OCI_SPEECH_POLL_INTERVAL_SECONDS: float = 10.0
+    DOCUMENT_AI_PROVIDER: str = "none"
+    OCI_DOCUMENT_COMPARTMENT_OCID: str | None = None
+    OCI_DOCUMENT_OUTPUT_BUCKET: str | None = None
+    OCI_DOCUMENT_OUTPUT_PREFIX: str = (
+        "projects/{project_id}/document_understanding/output/"
+    )
+    OCI_DOCUMENT_REGION: str | None = None
+    OCI_DOCUMENT_TIMEOUT_SECONDS: int = 900
+    OCI_DOCUMENT_POLL_INTERVAL_SECONDS: float = 10.0
+    OCI_DOCUMENT_ENABLE_DOCX: bool = False
+    OCI_DOCUMENT_ENABLE_PPTX: bool = False
+    OCI_DOCUMENT_ENABLE_XLSX: bool = False
+    OCI_DOCUMENT_ENABLE_PDF: bool = True
+    OCI_DOCUMENT_ENABLE_IMAGES: bool = True
+    LLM_PROVIDER: str = "none"
+    OCI_GENAI_REGION: str | None = None
+    OCI_GENAI_PROJECT_OCID: str | None = None
+    OCI_GENAI_MODEL_ID: str | None = None
+    OCI_GENAI_API_KEY: str | None = None
+    OCI_GENAI_COMPARTMENT_OCID: str | None = None
+    OCI_GENAI_MAX_INPUT_CHARS: int = 200000
+    OCI_GENAI_TIMEOUT_SECONDS: int = 120
+    OCI_GENAI_TEMPERATURE: float = 1
+    OCI_GENAI_MAX_OUTPUT_TOKENS: int = 16000
+    SECTION_EVIDENCE_MAX_CHARS: int = 30000
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
@@ -32,6 +58,21 @@ class Settings(BaseSettings):
     ]
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    @field_validator(
+        "OCI_DOCUMENT_ENABLE_DOCX",
+        "OCI_DOCUMENT_ENABLE_PPTX",
+        "OCI_DOCUMENT_ENABLE_XLSX",
+        "OCI_DOCUMENT_ENABLE_PDF",
+        "OCI_DOCUMENT_ENABLE_IMAGES",
+        mode="before",
+    )
+    @classmethod
+    def normalize_bool_typos(cls, value):
+        if isinstance(value, str) and value.strip().lower() == "fasle":
+            return False
+
+        return value
 
 
 @lru_cache
