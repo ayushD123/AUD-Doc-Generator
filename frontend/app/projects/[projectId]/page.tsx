@@ -11,6 +11,7 @@ import {
   createExtractOpenPointsJob,
   createExtractAllJob,
   createGenerateSourceSummariesAiJob,
+  createGenerateSectionDraftsAiJob,
   createGenerateAudPlanJob,
   createGenerateDocxJob,
   getAudPlan,
@@ -24,11 +25,13 @@ import {
   listProjectJobs,
   listProjectFiles,
   listSourceSummaries,
+  listSectionDrafts,
   sourceRoleLabels,
   sourceRoles,
   uploadProjectFile,
   type AUDPlan,
   type AUDPlanJson,
+  type AUDSectionDraft,
   type EvidenceItem,
   type ExtractedContent,
   type GeneratedDocument,
@@ -66,6 +69,15 @@ type SourceSummaryJson = {
   open_or_unresolved_items?: string[];
   source_confidence?: string;
   aud_usage_guidance?: string;
+};
+
+type SectionDraftJson = {
+  used_evidence_item_ids?: string[];
+  included_tables?: unknown[];
+  included_images?: unknown[];
+  unsupported_details?: unknown[];
+  open_point_candidates?: unknown[];
+  placeholders?: unknown[];
 };
 
 function parseExtractedContentJson(value: string | null): ExtractedContentJson {
@@ -114,6 +126,24 @@ function parseSourceSummaryJson(value: string | null): SourceSummaryJson {
 
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as SourceSummaryJson;
+    }
+  } catch {
+    return {};
+  }
+
+  return {};
+}
+
+function parseSectionDraftJson(value: string | null): SectionDraftJson {
+  if (!value) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as SectionDraftJson;
     }
   } catch {
     return {};
@@ -233,6 +263,86 @@ function formatSummaryList(values: string[] | undefined) {
   return values.join(", ");
 }
 
+function formatDraftDetail(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const question = record.question || record.text;
+    const topic = record.topic;
+
+    if (typeof question === "string" && typeof topic === "string") {
+      return `${topic}: ${question}`;
+    }
+
+    if (typeof question === "string") {
+      return question;
+    }
+
+    return JSON.stringify(value);
+  }
+
+  return String(value ?? "");
+}
+
+function buildDraftPreview(value: string) {
+  const normalizedValue = value.trim().replace(/\s+/g, " ");
+  return normalizedValue.length > 260
+    ? `${normalizedValue.slice(0, 260).trim()}...`
+    : normalizedValue || "Not available";
+}
+
+function getAudSectionOrder(audPlanJson: AUDPlanJson) {
+  const enhancedSections = audPlanJson.ai_enhanced_plan?.sections;
+  const sections =
+    enhancedSections && enhancedSections.length > 0
+      ? enhancedSections
+      : audPlanJson.sections ?? [];
+
+  return sections.filter((section) => section.include_in_aud !== false);
+}
+
+function buildOrderedSectionDrafts(
+  drafts: AUDSectionDraft[],
+  audPlanJson: AUDPlanJson,
+) {
+  const draftsBySectionId = new Map<string, AUDSectionDraft[]>();
+
+  for (const draft of drafts) {
+    draftsBySectionId.set(draft.section_id, [
+      ...(draftsBySectionId.get(draft.section_id) ?? []),
+      draft,
+    ]);
+  }
+
+  const ordered = getAudSectionOrder(audPlanJson).map((section, index) => {
+    const sectionDrafts = draftsBySectionId.get(section.section_id) ?? [];
+    draftsBySectionId.delete(section.section_id);
+
+    return {
+      order: index + 1,
+      sectionId: section.section_id,
+      title: section.title,
+      drafts: sectionDrafts,
+    };
+  });
+
+  const unmappedDrafts = Array.from(draftsBySectionId.values()).flat();
+
+  if (unmappedDrafts.length > 0) {
+    ordered.push({
+      order: ordered.length + 1,
+      sectionId: "unmapped-section-drafts",
+      title: "Unmapped Section Drafts",
+      drafts: unmappedDrafts,
+    });
+  }
+
+  return ordered.filter((group) => group.drafts.length > 0);
+}
+
 export default function ProjectDetailPage() {
   const params = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
@@ -241,6 +351,7 @@ export default function ProjectDetailPage() {
   const [extractedContents, setExtractedContents] = useState<ExtractedContent[]>([]);
   const [evidenceItems, setEvidenceItems] = useState<EvidenceItem[]>([]);
   const [sourceSummaries, setSourceSummaries] = useState<SourceSummary[]>([]);
+  const [sectionDrafts, setSectionDrafts] = useState<AUDSectionDraft[]>([]);
   const [openPoints, setOpenPoints] = useState<OpenPoint[]>([]);
   const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocument[]>([]);
   const [audPlan, setAudPlan] = useState<AUDPlan | null>(null);
@@ -255,6 +366,7 @@ export default function ProjectDetailPage() {
   const [isLoadingExtractedContent, setIsLoadingExtractedContent] = useState(true);
   const [isLoadingEvidenceItems, setIsLoadingEvidenceItems] = useState(true);
   const [isLoadingSourceSummaries, setIsLoadingSourceSummaries] = useState(true);
+  const [isLoadingSectionDrafts, setIsLoadingSectionDrafts] = useState(true);
   const [isLoadingOpenPoints, setIsLoadingOpenPoints] = useState(true);
   const [isLoadingGeneratedDocuments, setIsLoadingGeneratedDocuments] = useState(true);
   const [isLoadingAudPlan, setIsLoadingAudPlan] = useState(true);
@@ -267,6 +379,8 @@ export default function ProjectDetailPage() {
   const [isCreatingDocxJob, setIsCreatingDocxJob] = useState(false);
   const [isCreatingEvidenceIndexJob, setIsCreatingEvidenceIndexJob] = useState(false);
   const [isCreatingSourceSummariesJob, setIsCreatingSourceSummariesJob] =
+    useState(false);
+  const [isCreatingSectionDraftsJob, setIsCreatingSectionDraftsJob] =
     useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(
     {},
@@ -281,6 +395,9 @@ export default function ProjectDetailPage() {
     null,
   );
   const [sourceSummariesMessage, setSourceSummariesMessage] = useState<string | null>(
+    null,
+  );
+  const [sectionDraftsMessage, setSectionDraftsMessage] = useState<string | null>(
     null,
   );
   const [openPointsMessage, setOpenPointsMessage] = useState<string | null>(null);
@@ -362,6 +479,20 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function refreshSectionDrafts(projectId: string) {
+    setIsLoadingSectionDrafts(true);
+    setSectionDraftsMessage(null);
+
+    try {
+      setSectionDrafts(await listSectionDrafts(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setSectionDraftsMessage(`Unable to load section drafts: ${detail}`);
+    } finally {
+      setIsLoadingSectionDrafts(false);
+    }
+  }
+
   async function refreshOpenPoints(projectId: string) {
     setIsLoadingOpenPoints(true);
     setOpenPointsMessage(null);
@@ -439,6 +570,7 @@ export default function ProjectDetailPage() {
     void refreshExtractedContent(params.projectId);
     void refreshEvidenceItems(params.projectId);
     void refreshSourceSummaries(params.projectId);
+    void refreshSectionDrafts(params.projectId);
     void refreshOpenPoints(params.projectId);
     void refreshGeneratedDocuments(params.projectId);
     void refreshAudPlan(params.projectId);
@@ -595,6 +727,26 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function handleCreateSectionDraftsJob() {
+    setIsCreatingSectionDraftsJob(true);
+    setSectionDraftsMessage(null);
+
+    try {
+      await createGenerateSectionDraftsAiJob(params.projectId);
+      await refreshJobs(params.projectId);
+      setSectionDraftsMessage(
+        "AI section draft job created. Refresh Section Drafts after worker processing completes.",
+      );
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setSectionDraftsMessage(
+        `Unable to create AI section draft job: ${detail}`,
+      );
+    } finally {
+      setIsCreatingSectionDraftsJob(false);
+    }
+  }
+
   function isSectionExpanded(sectionKey: string) {
     return expandedSections[sectionKey] ?? false;
   }
@@ -608,6 +760,10 @@ export default function ProjectDetailPage() {
 
   const audPlanJson = parseAudPlanJson(audPlan?.plan_json ?? null);
   const plannedSections = audPlanJson.sections ?? [];
+  const orderedSectionDraftGroups = buildOrderedSectionDrafts(
+    sectionDrafts,
+    audPlanJson,
+  );
   const evidenceGroupCounts = buildEvidenceGroupCounts(evidenceItems);
   const sourceSummaryGroups = buildSourceSummaryGroups(sourceSummaries);
   const topEvidenceItems = [...evidenceItems]
@@ -1366,6 +1522,180 @@ export default function ProjectDetailPage() {
                                       </dd>
                                     </div>
                                   </dl>
+                                </article>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+
+            <section className="panel" aria-labelledby="section-drafts-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="section-drafts-title">Section Drafts</h2>
+                  <p className="muted-text">
+                    Review AI-generated section drafts prepared from bounded evidence packs.
+                  </p>
+                </div>
+
+                {renderSectionToggle("section-drafts")}
+              </div>
+
+              {isSectionExpanded("section-drafts") ? (
+                <div className="panel-content">
+                  <p className="review-note">
+                    AI draft requires senior consultant review before customer sharing.
+                  </p>
+
+                  <div className="button-group section-actions">
+                    <button
+                      type="button"
+                      className="primary-button"
+                      onClick={handleCreateSectionDraftsJob}
+                      disabled={isCreatingSectionDraftsJob}
+                    >
+                      {isCreatingSectionDraftsJob
+                        ? "Creating..."
+                        : "Generate AI Section Drafts"}
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => refreshSectionDrafts(params.projectId)}
+                      disabled={isLoadingSectionDrafts}
+                    >
+                      Refresh Section Drafts
+                    </button>
+                  </div>
+
+                  {sectionDraftsMessage ? (
+                    <p className="status-message">{sectionDraftsMessage}</p>
+                  ) : null}
+
+                  {isLoadingSectionDrafts ? (
+                    <p className="muted-text">Loading section drafts...</p>
+                  ) : null}
+
+                  {!isLoadingSectionDrafts && sectionDrafts.length === 0 ? (
+                    <p className="muted-text">No section drafts generated yet.</p>
+                  ) : null}
+
+                  {!isLoadingSectionDrafts && sectionDrafts.length > 0 ? (
+                    <div className="section-draft-group-list">
+                      {orderedSectionDraftGroups.map((group) => (
+                        <section key={group.sectionId} className="section-draft-group">
+                          <h3>
+                            {group.order}. {group.title}
+                          </h3>
+
+                          <div className="section-draft-list">
+                            {group.drafts.map((draft) => {
+                              const draftJson = parseSectionDraftJson(
+                                draft.draft_json,
+                              );
+                              const unsupportedDetails =
+                                draftJson.unsupported_details ?? [];
+                              const placeholders = draftJson.placeholders ?? [];
+                              const openPointCandidates =
+                                draftJson.open_point_candidates ?? [];
+                              const fullTextKey = `section-draft-text-${draft.id}`;
+
+                              return (
+                                <article key={draft.id} className="section-draft-row">
+                                  <div>
+                                    <h4>{draft.title}</h4>
+                                    <p>{buildDraftPreview(draft.draft_text)}</p>
+                                  </div>
+
+                                  <dl className="section-draft-meta">
+                                    <div>
+                                      <dt>Confidence</dt>
+                                      <dd>{draft.confidence}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Review Status</dt>
+                                      <dd>{draft.review_status}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Section ID</dt>
+                                      <dd>{draft.section_id}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Updated</dt>
+                                      <dd>{formatProjectDate(draft.updated_at)}</dd>
+                                    </div>
+                                  </dl>
+
+                                  <div className="button-group section-draft-actions">
+                                    <button
+                                      type="button"
+                                      className="secondary-button"
+                                      onClick={() => toggleSection(fullTextKey)}
+                                      aria-expanded={isSectionExpanded(fullTextKey)}
+                                    >
+                                      {isSectionExpanded(fullTextKey)
+                                        ? "Collapse Full Text"
+                                        : "Expand Full Text"}
+                                    </button>
+                                  </div>
+
+                                  {isSectionExpanded(fullTextKey) ? (
+                                    <pre className="section-draft-full-text">
+                                      {draft.draft_text}
+                                    </pre>
+                                  ) : null}
+
+                                  <div className="section-draft-detail-grid">
+                                    <div className="section-draft-detail-block">
+                                      <h5>Unsupported Details</h5>
+                                      {unsupportedDetails.length > 0 ? (
+                                        <ul>
+                                          {unsupportedDetails.map((item, index) => (
+                                            <li key={`${draft.id}-unsupported-${index}`}>
+                                              {formatDraftDetail(item)}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      ) : (
+                                        <p className="muted-text">None reported.</p>
+                                      )}
+                                    </div>
+
+                                    <div className="section-draft-detail-block">
+                                      <h5>Placeholders</h5>
+                                      {placeholders.length > 0 ? (
+                                        <ul>
+                                          {placeholders.map((item, index) => (
+                                            <li key={`${draft.id}-placeholder-${index}`}>
+                                              {formatDraftDetail(item)}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      ) : (
+                                        <p className="muted-text">None reported.</p>
+                                      )}
+                                    </div>
+
+                                    <div className="section-draft-detail-block">
+                                      <h5>Open Point Candidates</h5>
+                                      {openPointCandidates.length > 0 ? (
+                                        <ul>
+                                          {openPointCandidates.map((item, index) => (
+                                            <li key={`${draft.id}-open-point-${index}`}>
+                                              {formatDraftDetail(item)}
+                                            </li>
+                                          ))}
+                                        </ul>
+                                      ) : (
+                                        <p className="muted-text">None reported.</p>
+                                      )}
+                                    </div>
+                                  </div>
                                 </article>
                               );
                             })}

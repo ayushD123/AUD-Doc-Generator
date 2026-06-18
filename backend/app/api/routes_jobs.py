@@ -1,13 +1,14 @@
+import json
 from typing import Annotated
 from traceback import format_exception_only
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import Job, Project
-from app.schemas.job import JobCreate, JobRead
+from app.schemas.job import GenerateDocxJobOptions, JobCreate, JobRead
 from app.services.job_queue import JobQueueService, get_job_queue_service
 
 router = APIRouter(prefix="/projects/{project_id}/jobs", tags=["jobs"])
@@ -360,6 +361,25 @@ def create_extract_open_points_job(
 
 
 @router.post(
+    "/refine-open-points-ai",
+    response_model=JobRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_refine_open_points_ai_job(
+    project_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+) -> Job:
+    return create_project_job(
+        project_id=project_id,
+        job_type="refine_open_points_ai",
+        message="AI Open Points refinement job queued.",
+        db=db,
+        queue_service=queue_service,
+    )
+
+
+@router.post(
     "/generate-docx",
     response_model=JobRead,
     status_code=status.HTTP_201_CREATED,
@@ -368,11 +388,22 @@ def create_generate_docx_job(
     project_id: str,
     db: Annotated[Session, Depends(get_db)],
     queue_service: Annotated[JobQueueService, Depends(get_job_queue_service)],
+    payload: Annotated[GenerateDocxJobOptions | None, Body()] = None,
 ) -> Job:
+    message = "DOCX generation job queued."
+
+    if payload is not None:
+        message = json.dumps(
+            {
+                "status_message": message,
+                "options": payload.model_dump(),
+            }
+        )
+
     return create_project_job(
         project_id=project_id,
         job_type="generate_docx",
-        message="DOCX generation job queued.",
+        message=message,
         db=db,
         queue_service=queue_service,
     )

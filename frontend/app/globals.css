@@ -234,6 +234,8 @@ h3 {
 .evidence-item-list,
 .source-summary-group-list,
 .source-summary-list,
+.section-draft-group-list,
+.section-draft-list,
 .generated-document-list {
   display: grid;
   gap: 12px;
@@ -246,6 +248,7 @@ h3 {
 .extracted-content-row,
 .evidence-item-row,
 .source-summary-row,
+.section-draft-row,
 .generated-document-row {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr);
@@ -268,6 +271,7 @@ h3 {
 .extracted-content-row p,
 .evidence-item-row p,
 .source-summary-row p,
+.section-draft-row p,
 .generated-document-row p {
   margin-top: 4px;
   color: var(--muted);
@@ -285,6 +289,7 @@ h3 {
 .extracted-content-meta,
 .evidence-item-meta,
 .source-summary-meta,
+.section-draft-meta,
 .generated-document-meta {
   display: grid;
   gap: 14px;
@@ -392,7 +397,23 @@ h3 {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.section-draft-group {
+  display: grid;
+  gap: 10px;
+}
+
 .source-summary-row h4 {
+  font-size: 1rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.section-draft-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.section-draft-row h4,
+.section-draft-group h3 {
   font-size: 1rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
@@ -400,6 +421,66 @@ h3 {
 
 .source-summary-meta {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.section-draft-meta {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.section-draft-actions {
+  justify-content: flex-start;
+}
+
+.review-note {
+  border-left: 4px solid var(--accent);
+  padding: 10px 12px;
+  background: #eef3ff;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.section-draft-full-text {
+  max-height: 360px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 14px;
+  background: #f7f8fa;
+  color: var(--text);
+  font: 0.92rem/1.55 Arial, Helvetica, sans-serif;
+}
+
+.section-draft-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.section-draft-detail-block {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.section-draft-detail-block h5 {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.section-draft-detail-block ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .generated-document-meta {
@@ -594,6 +675,7 @@ dd {
   .extracted-content-row,
   .evidence-item-row,
   .source-summary-row,
+  .section-draft-row,
   .generated-document-row,
   .project-meta,
   .file-meta,
@@ -604,6 +686,8 @@ dd {
   .extracted-content-meta,
   .evidence-item-meta,
   .source-summary-meta,
+  .section-draft-meta,
+  .section-draft-detail-grid,
   .evidence-summary-grid,
   .generated-document-meta,
   .metadata-grid {

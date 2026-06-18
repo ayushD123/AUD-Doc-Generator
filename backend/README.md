@@ -2,7 +2,7 @@
 
 FastAPI backend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, optional OCI Speech media transcription, optional OCI Document Understanding enrichment, normalized evidence indexing, an optional OCI Generative AI LLM wrapper, AI source summary generation, AI section draft generation, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, authentication, final LLM-driven DOCX AUD generation, template-perfect AUD generation, or Alembic migrations.
+This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, optional OCI Speech media transcription, optional OCI Document Understanding enrichment, normalized evidence indexing, an optional OCI Generative AI LLM wrapper, AI source summary generation, AI section draft generation, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, AI Open Points refinement, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, authentication, final LLM-driven DOCX AUD generation, template-perfect AUD generation, or Alembic migrations.
 
 ## Create a Virtual Environment
 
@@ -204,6 +204,7 @@ POST /projects/{project_id}/jobs/build-section-evidence-packs
 POST /projects/{project_id}/jobs/generate-section-drafts-ai
 POST /projects/{project_id}/jobs/enrich-document-understanding
 POST /projects/{project_id}/jobs/extract-open-points
+POST /projects/{project_id}/jobs/refine-open-points-ai
 POST /projects/{project_id}/jobs/generate-docx
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
@@ -358,17 +359,31 @@ Create an open points extraction job:
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/extract-open-points"
 ```
 
+Create an AI Open Points refinement job:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/refine-open-points-ai"
+```
+
 Create a local editable DOCX generation job:
 
 ```powershell
 curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-docx"
 ```
 
+Create a DOCX generation job with AI draft rendering options:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-docx" `
+  -H "Content-Type: application/json" `
+  -d "{\"use_ai_drafts\":true,\"include_draft_sections\":true,\"include_images\":true,\"include_open_points\":true}"
+```
+
 Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts | transcribe_media | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | build_evidence_index | generate_source_summaries_ai | enhance_aud_plan_ai | build_section_evidence_packs | generate_section_drafts_ai | enrich_with_document_understanding | extract_open_points | generate_docx",
+  "job_type": "classify_files | extract_transcripts | transcribe_media | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | build_evidence_index | generate_source_summaries_ai | enhance_aud_plan_ai | build_section_evidence_packs | generate_section_drafts_ai | enrich_with_document_understanding | extract_open_points | refine_open_points_ai | generate_docx",
   "status": "pending",
   "progress": 0
 }
@@ -397,6 +412,7 @@ The local worker picks pending jobs from the database and processes:
 - `generate_section_drafts_ai`: asks the configured LLM for one strict JSON section draft per evidence pack, stores reviewable drafts, and inserts deduped open point candidates.
 - `enrich_with_document_understanding`: optionally enriches eligible uploaded files with OCI Document Understanding OCR/table/classification output without replacing local extraction.
 - `extract_open_points`: scans extracted content for unresolved questions and stores deduplicated open points.
+- `refine_open_points_ai`: asks the configured LLM to clean, deduplicate, and classify existing Open Points plus candidates from source summaries, AUD plans, and section drafts, then marks duplicate existing rows as `Removed` and creates refined `Open` rows with readable evidence text plus separate API metadata.
 - `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, unresolved open points, and writes it through the configured storage backend.
 
 `extract_all` progress moves across extraction stages. If some files fail and at least one file succeeds, the job ends as `completed_with_warnings`. If all attempted files fail, the job ends as `failed`.
@@ -920,6 +936,13 @@ json_content = workbook metadata, visible sheets, extracted rows, and source_rol
 Current DOCX generation scope:
 
 - Uses the latest AUD plan and mapped extracted content only.
+- When `use_ai_drafts=true`, accepted/reviewed/approved section drafts are preferred over rule-based content.
+- Section drafts with `review_status=draft` are used only when `include_draft_sections=true`.
+- Section drafts with `review_status=omitted`, `excluded`, or `removed` exclude that section.
+- If an AI draft is unavailable or gated off, DOCX generation falls back to rule-based source content.
+- Selected draft tables from `draft_json.included_tables` are inserted when resolvable from direct rows or evidence item IDs.
+- Selected draft images from `draft_json.included_images` are inserted when `include_images=true`; otherwise image insertion is skipped.
+- Open Points are included only when `include_open_points=true`, and only rows with status `Open` are rendered.
 - If the latest AUD plan is missing, contains only standard sections, or predates extracted FDD content, DOCX generation refreshes the deterministic AUD plan before rendering.
 - Enterprise Structure is a required carry-forward section. If detected in FDD, PPT, or other extracted source content, it is inserted after Introduction with source text, tables, and supported associated images. If not detected, a clear placeholder is inserted after Introduction.
 - Does not call an LLM.
@@ -935,7 +958,9 @@ Current DOCX generation scope:
 - Skips PPT images in formats `python-docx` cannot embed directly, such as WMF vector images.
 - If section content is too long, includes the first meaningful paragraphs and adds `Additional details available in source document.`
 - If no supported mapped content is available, writes `<Content not available in provided source material>`.
-- Open Points includes unresolved items only.
+- Open Points includes rows with status `Open` only.
+- Documents Referred is excluded.
+- Source Conflict Summary is appended only when `INTERNAL_DEBUG_OUTPUT=true`.
 - Unsupported source mappings are left as placeholders rather than inferred.
 - PPT image placement uses only local extracted image paths; no OCR or image understanding is performed.
 
@@ -1119,6 +1144,29 @@ Expected results:
 - If FDD is clear, non-FDD conflicts do not create Open Points.
 - If FDD is absent, non-FDD conflicts can create Open Points.
 
+## Manual AI Open Points Refinement Test
+
+Run Open Points extraction and any AI summary/plan/draft jobs that should
+contribute candidates, configure an LLM provider, then run:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/refine-open-points-ai"
+
+python -m app.workers.local_worker
+
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/open-points"
+```
+
+Expected results:
+
+- The `refine_open_points_ai` job reaches `completed` with `100` progress.
+- Refined Open Points have status `Open`.
+- Existing duplicate Open Points are retained but marked `Removed`.
+- Closed, Resolved, Aligned, and Done items are excluded.
+- Lower-priority conflicts answered by FDD are excluded.
+- FDD items that say `needs more discussion`, `to be confirmed`, `TBD`, `pending`, or `awaiting confirmation` remain Open Points.
+- Refined rows return readable evidence text in `evidence`; source Open Point IDs, evidence item IDs, exclusions, and refinement counts are exposed in `refinement_metadata`.
+
 ## Manual DOCX Generation Test
 
 Run extraction, AUD plan generation, and open point extraction first when source material is available, then run:
@@ -1146,7 +1194,7 @@ Expected results:
 - The document contains a title page, version history table, Purpose and Scope placeholder, planned section headings, supported rule-based section content or clear placeholders, unresolved open points table, and internal review note.
 - Matching PPT images appear below relevant planned sections with source slide captions when extracted image files exist locally.
 - If an earlier AUD plan was generated before extraction or before FDD content was available, the DOCX job refreshes the plan so extracted FDD/PPT sections can appear and FDD can win.
-- No LLM call, OCR, image interpretation, or template-perfect formatting is used.
+- No LLM call, OCR, image interpretation, or template-perfect formatting is used during DOCX generation.
 
 ## OCI Generative AI LLM Wrapper
 

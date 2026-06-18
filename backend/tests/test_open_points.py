@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
-from app.models import ExtractedContent, Job, UploadedFile
+from app.models import ExtractedContent, Job, OpenPoint, UploadedFile
 from app.services.job_queue import LocalJobQueueService, get_job_queue_service
 from app.workers.local_worker import process_extract_open_points_job
 
@@ -294,3 +294,42 @@ def test_non_fdd_conflict_included_when_fdd_absent(
 
     assert len(open_points) == 1
     assert "conflict" in open_points[0]["question"]
+
+
+def test_refined_open_point_route_returns_evidence_text_not_metadata_json(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    client, session_local = client_and_session
+    project_id = create_project(client)
+
+    with session_local() as session:
+        session.add(
+            OpenPoint(
+                project_id=project_id,
+                topic="Shipping",
+                question="Confirm shipping cutover timing.",
+                status="Open",
+                evidence=json.dumps(
+                    {
+                        "refinement_job_type": "refine_open_points_ai",
+                        "evidence_text": "Original deterministic extraction.",
+                        "source_open_point_ids": ["source-open-point-id"],
+                        "evidence_item_ids": ["evidence-item-id"],
+                        "reason": "Cleaned duplicate wording.",
+                        "metadata": {"candidate_count": 1},
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+    response = client.get(f"/projects/{project_id}/open-points")
+
+    assert response.status_code == 200
+    open_points = response.json()
+    assert len(open_points) == 1
+    assert open_points[0]["evidence"] == "Original deterministic extraction."
+    assert open_points[0]["refinement_metadata"]["source_open_point_ids"] == [
+        "source-open-point-id"
+    ]
+    assert "evidence_text" not in open_points[0]["refinement_metadata"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,8 +15,17 @@ from docx.shared import Emu
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import Settings, get_settings
 from app.db.base import utc_now
-from app.models import AUDPlan, ExtractedContent, GeneratedDocument, OpenPoint, Project
+from app.models import (
+    AUDPlan,
+    AUDSectionDraft,
+    EvidenceItem,
+    ExtractedContent,
+    GeneratedDocument,
+    OpenPoint,
+    Project,
+)
 from app.services.file_storage import (
     LocalStorageService,
     StorageService,
@@ -25,19 +35,17 @@ from app.services.file_storage import (
 DOCUMENT_TYPE = "aud_docx"
 PLACEHOLDER_LINE = "<Content not available in provided source material>"
 TRUNCATION_NOTE = "Additional details available in source document."
-GENERATION_NOTE = "Draft generated for internal review."
+GENERATION_NOTE = (
+    "Generated draft for Oracle internal review. Senior consultant review required "
+    "before customer sharing."
+)
 SKIP_PLANNED_SECTION_TITLES = {
     "cover page",
+    "documents referred",
     "document version history",
     "table of contents",
     "purpose and scope",
     "open points",
-}
-RESOLVED_OPEN_POINT_STATUSES = {
-    "aligned",
-    "closed",
-    "done",
-    "resolved",
 }
 MAX_SECTION_PARAGRAPHS = 4
 MAX_SECTION_CHARACTERS = 1800
@@ -62,6 +70,24 @@ LOW_VALUE_SLIDE_TITLES = {
     "thanks",
     "welcome",
 }
+ACCEPTED_DRAFT_STATUSES = {"accepted", "approved", "reviewed"}
+OMITTED_DRAFT_STATUSES = {"excluded", "omitted", "removed"}
+
+
+@dataclass(frozen=True)
+class DocxGenerationOptions:
+    use_ai_drafts: bool = True
+    include_draft_sections: bool = True
+    include_images: bool = True
+    include_open_points: bool = True
+
+
+@dataclass(frozen=True)
+class SectionRenderContext:
+    draft: AUDSectionDraft | None
+    draft_json: dict[str, Any]
+    paragraphs: list[str]
+    was_truncated: bool
 
 
 def normalize_title(value: str) -> str:
@@ -141,6 +167,33 @@ def parse_plan_json(aud_plan: AUDPlan | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def parse_json_object(value: str | None) -> dict[str, Any]:
+    if not value:
+        return {}
+
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return {}
+
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def parse_docx_generation_options(value: str | None = None) -> DocxGenerationOptions:
+    payload = parse_json_object(value)
+    options = payload.get("options") if payload else {}
+
+    if not isinstance(options, dict):
+        options = {}
+
+    return DocxGenerationOptions(
+        use_ai_drafts=bool(options.get("use_ai_drafts", True)),
+        include_draft_sections=bool(options.get("include_draft_sections", True)),
+        include_images=bool(options.get("include_images", True)),
+        include_open_points=bool(options.get("include_open_points", True)),
+    )
+
+
 def plan_has_content_sections(plan_payload: dict[str, Any]) -> bool:
     return bool(iter_planned_sections(plan_payload))
 
@@ -153,15 +206,7 @@ def plan_has_enterprise_structure_section(plan_payload: dict[str, Any]) -> bool:
 
 
 def parse_extracted_json(extracted_content: ExtractedContent) -> dict[str, Any]:
-    if not extracted_content.json_content:
-        return {}
-
-    try:
-        parsed = json.loads(extracted_content.json_content)
-    except json.JSONDecodeError:
-        return {}
-
-    return parsed if isinstance(parsed, dict) else {}
+    return parse_json_object(extracted_content.json_content)
 
 
 def latest_aud_plan(session: Session, project_id: str) -> AUDPlan | None:
@@ -182,8 +227,28 @@ def list_open_points(session: Session, project_id: str) -> list[OpenPoint]:
     return [
         open_point
         for open_point in session.scalars(statement)
-        if normalize_title(open_point.status) not in RESOLVED_OPEN_POINT_STATUSES
+        if normalize_title(open_point.status) == "open"
     ]
+
+
+def list_section_drafts(session: Session, project_id: str) -> list[AUDSectionDraft]:
+    return list(
+        session.scalars(
+            select(AUDSectionDraft)
+            .where(AUDSectionDraft.project_id == project_id)
+            .order_by(AUDSectionDraft.created_at.asc())
+        )
+    )
+
+
+def get_evidence_item_by_id(
+    session: Session,
+    project_id: str,
+) -> dict[str, EvidenceItem]:
+    evidence_items = session.scalars(
+        select(EvidenceItem).where(EvidenceItem.project_id == project_id)
+    )
+    return {evidence_item.id: evidence_item for evidence_item in evidence_items}
 
 
 def get_extracted_content_by_id(
@@ -283,6 +348,73 @@ def resolve_plan_payload(
 def get_section_title(section: dict[str, Any]) -> str | None:
     title = section.get("title")
     return title if isinstance(title, str) else None
+
+
+def get_section_id(section: dict[str, Any]) -> str | None:
+    section_id = section.get("section_id")
+    return section_id if isinstance(section_id, str) else None
+
+
+def parse_draft_json(draft: AUDSectionDraft | None) -> dict[str, Any]:
+    if draft is None:
+        return {}
+
+    return parse_json_object(draft.draft_json)
+
+
+def ensure_json_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+
+    return value if isinstance(value, list) else [value]
+
+
+def build_section_draft_lookup(
+    drafts: list[AUDSectionDraft],
+) -> dict[str, AUDSectionDraft]:
+    lookup: dict[str, AUDSectionDraft] = {}
+
+    for draft in drafts:
+        lookup[f"id:{normalize_title(draft.section_id)}"] = draft
+        lookup[f"title:{normalize_title(draft.title)}"] = draft
+
+    return lookup
+
+
+def get_matching_section_draft(
+    section: dict[str, Any],
+    draft_lookup: dict[str, AUDSectionDraft],
+) -> AUDSectionDraft | None:
+    section_id = get_section_id(section)
+    if section_id:
+        draft = draft_lookup.get(f"id:{normalize_title(section_id)}")
+        if draft is not None:
+            return draft
+
+    title = get_section_title(section)
+    if not title:
+        return None
+
+    return draft_lookup.get(f"title:{normalize_title(title)}")
+
+
+def is_draft_allowed(
+    draft: AUDSectionDraft | None,
+    options: DocxGenerationOptions,
+) -> bool:
+    if draft is None or not options.use_ai_drafts:
+        return False
+
+    review_status = normalize_title(draft.review_status)
+
+    if review_status in ACCEPTED_DRAFT_STATUSES:
+        return True
+
+    return review_status == "draft" and options.include_draft_sections
+
+
+def is_draft_omitted(draft: AUDSectionDraft | None) -> bool:
+    return draft is not None and normalize_title(draft.review_status) in OMITTED_DRAFT_STATUSES
 
 
 def get_section_source_role_basis(section: dict[str, Any]) -> str:
@@ -812,6 +944,192 @@ def add_section_images(
         caption_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
+def parse_evidence_json(evidence_item: EvidenceItem | None) -> dict[str, Any]:
+    if evidence_item is None:
+        return {}
+
+    return parse_json_object(evidence_item.json_data)
+
+
+def normalize_table_rows(rows: Any) -> list[list[str]]:
+    if not isinstance(rows, list):
+        return []
+
+    normalized_rows: list[list[str]] = []
+    for row in rows:
+        if isinstance(row, list):
+            normalized_rows.append([str(cell or "") for cell in row])
+        elif isinstance(row, dict):
+            values = row.get("values")
+            if isinstance(values, list):
+                normalized_rows.append([str(cell or "") for cell in values])
+
+    return [row for row in normalized_rows if any(cell.strip() for cell in row)]
+
+
+def rows_from_table_item(
+    table_item: Any,
+    evidence_item_by_id: dict[str, EvidenceItem],
+) -> tuple[str | None, list[list[str]]]:
+    if isinstance(table_item, str):
+        evidence_item = evidence_item_by_id.get(table_item)
+        return evidence_item.title if evidence_item else None, rows_from_evidence(evidence_item)
+
+    if not isinstance(table_item, dict):
+        return None, []
+
+    title = table_item.get("title")
+    table_title = title if isinstance(title, str) else None
+    rows = normalize_table_rows(table_item.get("rows"))
+
+    if rows:
+        return table_title, rows
+
+    evidence_item_id = table_item.get("evidence_item_id") or table_item.get("id")
+    if not isinstance(evidence_item_id, str):
+        return table_title, []
+
+    evidence_item = evidence_item_by_id.get(evidence_item_id)
+    return table_title or (evidence_item.title if evidence_item else None), rows_from_evidence(
+        evidence_item
+    )
+
+
+def rows_from_evidence(evidence_item: EvidenceItem | None) -> list[list[str]]:
+    if evidence_item is None:
+        return []
+
+    json_data = parse_evidence_json(evidence_item)
+
+    for key_path in (
+        ("table", "rows"),
+        ("slide", "tables"),
+        ("rows",),
+        ("sheet", "rows"),
+    ):
+        current: Any = json_data
+        for key in key_path:
+            if isinstance(current, dict):
+                current = current.get(key)
+            else:
+                current = None
+                break
+
+        if key_path == ("slide", "tables") and isinstance(current, list):
+            for table in current:
+                if isinstance(table, dict):
+                    rows = normalize_table_rows(table.get("rows"))
+                    if rows:
+                        return rows
+
+        rows = normalize_table_rows(current)
+        if rows:
+            return rows
+
+    text_rows = [
+        [cell.strip() for cell in line.split("|")]
+        for line in (evidence_item.text or "").splitlines()
+        if line.strip()
+    ]
+    return [row for row in text_rows if any(cell for cell in row)]
+
+
+def add_section_tables(
+    document: Document,
+    included_tables: list[Any],
+    evidence_item_by_id: dict[str, EvidenceItem],
+) -> None:
+    for table_item in included_tables:
+        title, rows = rows_from_table_item(table_item, evidence_item_by_id)
+        if not rows:
+            continue
+
+        if title:
+            document.add_paragraph(title)
+
+        column_count = max(len(row) for row in rows)
+        table = document.add_table(rows=1, cols=column_count)
+        table.style = "Table Grid"
+
+        for index, value in enumerate(rows[0]):
+            table.rows[0].cells[index].text = value
+
+        for source_row in rows[1:]:
+            row = table.add_row().cells
+            for index, value in enumerate(source_row[:column_count]):
+                row[index].text = value
+
+
+def image_from_evidence(
+    evidence_item: EvidenceItem | None,
+) -> dict[str, Any] | None:
+    if evidence_item is None:
+        return None
+
+    json_data = parse_evidence_json(evidence_item)
+    image_path = json_data.get("image_path")
+    slide_number = json_data.get("slide_number")
+
+    if not isinstance(image_path, str):
+        image_path = evidence_item.text if isinstance(evidence_item.text, str) else None
+
+    if not isinstance(image_path, str):
+        return None
+
+    return {
+        "storage_path": image_path,
+        "slide_number": slide_number if isinstance(slide_number, int) else None,
+        "slide_title": evidence_item.title or "Selected image",
+    }
+
+
+def normalize_included_images(
+    included_images: list[Any],
+    evidence_item_by_id: dict[str, EvidenceItem],
+) -> list[dict[str, Any]]:
+    images: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    for item in included_images:
+        image: dict[str, Any] | None = None
+
+        if isinstance(item, str):
+            evidence_image = image_from_evidence(evidence_item_by_id.get(item))
+            image = evidence_image or {"storage_path": item, "slide_title": "Selected image"}
+        elif isinstance(item, dict):
+            storage_path = (
+                item.get("storage_path")
+                or item.get("image_path")
+                or item.get("path")
+            )
+            if isinstance(storage_path, str):
+                image = {
+                    "storage_path": storage_path,
+                    "slide_number": item.get("slide_number"),
+                    "slide_title": item.get("slide_title") or item.get("title") or "Selected image",
+                    "caption": item.get("caption"),
+                }
+            else:
+                evidence_item_id = item.get("evidence_item_id") or item.get("id")
+                if isinstance(evidence_item_id, str):
+                    image = image_from_evidence(evidence_item_by_id.get(evidence_item_id))
+
+        if image is None:
+            continue
+
+        storage_path = image.get("storage_path")
+        if not isinstance(storage_path, str):
+            continue
+
+        if not is_supported_docx_image_path(storage_path) or storage_path in seen_paths:
+            continue
+
+        seen_paths.add(storage_path)
+        images.append(image)
+
+    return images
+
+
 def build_section_content(
     section: dict[str, Any],
     extracted_content_by_id: dict[str, ExtractedContent],
@@ -878,6 +1196,37 @@ def build_section_content(
     return [], False
 
 
+def build_section_render_context(
+    section: dict[str, Any],
+    extracted_content_by_id: dict[str, ExtractedContent],
+    draft_lookup: dict[str, AUDSectionDraft],
+    options: DocxGenerationOptions,
+) -> SectionRenderContext | None:
+    draft = get_matching_section_draft(section, draft_lookup)
+
+    if is_draft_omitted(draft):
+        return None
+
+    draft_json = parse_draft_json(draft)
+    if is_draft_allowed(draft, options):
+        paragraphs = meaningful_paragraphs(draft.draft_text)
+        if paragraphs and paragraphs != [PLACEHOLDER_LINE]:
+            return SectionRenderContext(
+                draft=draft,
+                draft_json=draft_json,
+                paragraphs=paragraphs,
+                was_truncated=False,
+            )
+
+    paragraphs, was_truncated = build_section_content(section, extracted_content_by_id)
+    return SectionRenderContext(
+        draft=draft,
+        draft_json=draft_json,
+        paragraphs=paragraphs,
+        was_truncated=was_truncated,
+    )
+
+
 def iter_planned_sections(plan_payload: dict[str, Any]) -> list[dict[str, Any]]:
     sections = plan_payload.get("sections")
 
@@ -893,11 +1242,18 @@ def iter_planned_sections(plan_payload: dict[str, Any]) -> list[dict[str, Any]]:
 
         title = section.get("title")
         include_in_aud = section.get("include_in_aud", True)
+        missing_info_handling = section.get("missing_info_handling")
 
         if not isinstance(title, str) or include_in_aud is False:
             continue
 
         normalized_title = normalize_title(title)
+        if (
+            isinstance(missing_info_handling, str)
+            and normalize_title(missing_info_handling) == "omit"
+        ):
+            continue
+
         if (
             normalized_title in SKIP_PLANNED_SECTION_TITLES
             or normalized_title in seen_titles
@@ -987,13 +1343,37 @@ def add_open_points_table(document: Document, open_points: list[OpenPoint]) -> N
         row[3].text = open_point.status
 
 
+def add_source_conflict_summary_appendix(
+    document: Document,
+    plan_payload: dict[str, Any],
+) -> None:
+    ai_plan = plan_payload.get("ai_enhanced_plan")
+    warnings: list[str] = []
+
+    if isinstance(ai_plan, dict):
+        raw_warnings = ai_plan.get("warnings")
+        if isinstance(raw_warnings, list):
+            warnings.extend(str(warning) for warning in raw_warnings if str(warning))
+
+    if not warnings:
+        return
+
+    document.add_heading("Source Conflict Summary", level=1)
+    for warning in warnings:
+        document.add_paragraph(warning)
+
+
 def build_document(
     project: Project,
     plan_payload: dict[str, Any],
     extracted_content_by_id: dict[str, ExtractedContent],
+    section_drafts: list[AUDSectionDraft],
+    evidence_item_by_id: dict[str, EvidenceItem],
     open_points: list[OpenPoint],
     storage_service: StorageService,
     temporary_dir: Path,
+    options: DocxGenerationOptions,
+    settings: Settings,
 ) -> Document:
     document = Document()
     current_date = utc_now().date()
@@ -1017,31 +1397,54 @@ def build_document(
         "be completed from validated source material and confirmed project inputs."
     )
 
+    draft_lookup = build_section_draft_lookup(section_drafts)
+
     for section in iter_planned_sections(plan_payload):
-        title = section["title"]
-        document.add_heading(title, level=1)
-        paragraphs, was_truncated = build_section_content(
+        render_context = build_section_render_context(
             section,
             extracted_content_by_id,
+            draft_lookup,
+            options,
         )
+        if render_context is None:
+            continue
 
-        if paragraphs:
-            for paragraph in paragraphs:
+        title = section["title"]
+        document.add_heading(title, level=1)
+
+        if render_context.paragraphs:
+            for paragraph in render_context.paragraphs:
                 document.add_paragraph(paragraph)
 
-            if was_truncated:
+            if render_context.was_truncated:
                 document.add_paragraph(TRUNCATION_NOTE)
         else:
             document.add_paragraph(PLACEHOLDER_LINE)
 
-        add_section_images(
+        add_section_tables(
             document,
-            collect_section_images(section, extracted_content_by_id),
-            storage_service,
-            temporary_dir,
+            ensure_json_list(render_context.draft_json.get("included_tables")),
+            evidence_item_by_id,
         )
 
-    add_open_points_table(document, open_points)
+        if options.include_images:
+            selected_images = normalize_included_images(
+                ensure_json_list(render_context.draft_json.get("included_images")),
+                evidence_item_by_id,
+            )
+            add_section_images(
+                document,
+                selected_images or collect_section_images(section, extracted_content_by_id),
+                storage_service,
+                temporary_dir,
+            )
+
+    if options.include_open_points:
+        add_open_points_table(document, open_points)
+
+    if settings.INTERNAL_DEBUG_OUTPUT:
+        add_source_conflict_summary_appendix(document, plan_payload)
+
     document.add_paragraph(GENERATION_NOTE)
     return document
 
@@ -1051,12 +1454,16 @@ def generate_docx(
     project_id: str,
     storage_root: Path | None = None,
     storage_service: StorageService | None = None,
+    options: DocxGenerationOptions | None = None,
+    settings: Settings | None = None,
 ) -> GeneratedDocument:
     project = session.get(Project, project_id)
 
     if project is None:
         raise ValueError("Project not found.")
 
+    resolved_options = options or DocxGenerationOptions()
+    resolved_settings = settings or get_settings()
     resolved_storage_service = resolve_storage_service(storage_root, storage_service)
     extracted_content_by_id = get_extracted_content_by_id(session, project_id)
     plan_payload = resolve_plan_payload(
@@ -1064,6 +1471,8 @@ def generate_docx(
         project_id,
         extracted_content_by_id,
     )
+    section_drafts = list_section_drafts(session, project_id)
+    evidence_item_by_id = get_evidence_item_by_id(session, project_id)
     open_points = list_open_points(session, project_id)
     timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
     filename_prefix = sanitize_filename_part(
@@ -1078,9 +1487,13 @@ def generate_docx(
             project=project,
             plan_payload=plan_payload,
             extracted_content_by_id=extracted_content_by_id,
+            section_drafts=section_drafts,
+            evidence_item_by_id=evidence_item_by_id,
             open_points=open_points,
             storage_service=resolved_storage_service,
             temporary_dir=temporary_root,
+            options=resolved_options,
+            settings=resolved_settings,
         )
         output_path = temporary_root / filename
         document.save(output_path)

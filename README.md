@@ -6,7 +6,7 @@ This repository will evolve into a tool that helps generate Application Understa
 
 ## Current Phase
 
-The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace with collapsible detail sections, local uploads, an optional OCI Object Storage adapter, optional OCI Queue publishing/worker support, optional OCI Speech media transcription, optional OCI Document Understanding enrichment, normalized evidence indexing with read-only frontend review, an optional OCI Generative AI LLM wrapper, AI source summary generation with read-only frontend review, AI-enhanced AUD plan refinement for later drafting, deterministic section evidence packs, AI section draft generation for review, deterministic extraction, source priority reporting, AUD planning, open point extraction, and rule-based editable DOCX draft output with frontend download controls.
+The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace with collapsible detail sections, local uploads, an optional OCI Object Storage adapter, optional OCI Queue publishing/worker support, optional OCI Speech media transcription, optional OCI Document Understanding enrichment, normalized evidence indexing with read-only frontend review, an optional OCI Generative AI LLM wrapper, AI source summary generation with read-only frontend review, AI-enhanced AUD plan refinement for later drafting, deterministic section evidence packs, AI section draft generation with read-only frontend review, deterministic extraction, source priority reporting, AUD planning, open point extraction, AI Open Points refinement, and rule-based editable DOCX draft output with frontend download controls.
 
 It intentionally does not include Docker configuration, authentication, Redis, or final LLM-driven DOCX AUD generation.
 
@@ -42,3 +42,19 @@ For OCI GPT-style models that only support the default model temperature, keep
 
 Section evidence packs use `SECTION_EVIDENCE_MAX_CHARS=30000` by default to keep
 future section-drafting prompts bounded and traceable.
+
+DOCX generation can now use reviewed AI section drafts before falling back to
+rule-based source content. The `generate-docx` job accepts options for AI draft
+usage, draft-status sections, images, and Open Points while keeping FDD as the
+golden source and requiring internal review before customer sharing.
+
+## AI Open Points Refinement
+
+`POST /projects/{project_id}/jobs/refine-open-points-ai` queues
+`refine_open_points_ai`. The worker sends existing Open Points plus Open Point
+candidates from Source Summaries, AUD Plans, and Section Drafts to the configured
+LLM as strict JSON. The refinement keeps only unresolved questions/manual
+actions, excludes Closed/Resolved/Aligned/Done items, respects FDD as golden
+source, marks duplicate existing Open Points as `Removed`, creates refined
+`Open` items, returns readable evidence text for review, and exposes refinement
+metadata separately in the Open Points API response.

@@ -8,6 +8,13 @@ class JobCreate(BaseModel):
     message: str | None = None
 
 
+class GenerateDocxJobOptions(BaseModel):
+    use_ai_drafts: bool = True
+    include_draft_sections: bool = True
+    include_images: bool = True
+    include_open_points: bool = True
+
+
 class JobRead(BaseModel):
     id: str
     project_id: str

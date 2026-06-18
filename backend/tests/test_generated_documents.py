@@ -15,6 +15,8 @@ from app.db.session import get_db
 from app.main import create_app
 from app.models import (
     AUDPlan,
+    AUDSectionDraft,
+    EvidenceItem,
     ExtractedContent,
     GeneratedDocument,
     Job,
@@ -203,7 +205,10 @@ def test_generate_docx_job_creates_file_and_generated_document_record(
         "Orders are captured from validated FDD source material before fulfillment."
         in document_text
     )
-    assert "Draft generated for internal review." in document_text
+    assert (
+        "Generated draft for Oracle internal review. Senior consultant review required "
+        "before customer sharing."
+    ) in document_text
     table_text = "\n".join(
         cell.text
         for table in document.tables
@@ -223,6 +228,269 @@ def test_generate_docx_job_creates_file_and_generated_document_record(
     )
     assert download_response.status_code == 200
     assert download_response.content.startswith(b"PK")
+
+
+def test_accepted_ai_draft_is_preferred_over_rule_based_content(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        table_evidence = EvidenceItem(
+            project_id=project_id,
+            evidence_type="table",
+            source_role="fdd",
+            title="Order Capture table",
+            text="Field | Value\nCapture Mode | Manual",
+            json_data=json.dumps(
+                {
+                    "table": {
+                        "rows": [
+                            ["Field", "Value"],
+                            ["Capture Mode", "Manual"],
+                        ]
+                    }
+                }
+            ),
+            priority=100,
+            confidence="high",
+        )
+        session.add(table_evidence)
+        session.flush()
+        session.add(
+            AUDSectionDraft(
+                project_id=project_id,
+                section_id="section-order-capture",
+                title="Order Capture",
+                draft_text="AI accepted order capture narrative is used for the AUD.",
+                draft_json=json.dumps(
+                    {
+                        "section_id": "section-order-capture",
+                        "title": "Order Capture",
+                        "included_tables": [
+                            {"evidence_item_id": table_evidence.id}
+                        ],
+                        "included_images": [],
+                    }
+                ),
+                confidence="high",
+                review_status="accepted",
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+    assert "AI accepted order capture narrative is used for the AUD." in document_text
+    assert (
+        "Orders are captured from validated FDD source material before fulfillment."
+        not in document_text
+    )
+    table_text = "\n".join(
+        cell.text
+        for table in Document(output_path).tables
+        for row in table.rows
+        for cell in row.cells
+    )
+    assert "Capture Mode" in table_text
+    assert "Manual" in table_text
+
+
+def test_draft_section_requires_include_draft_sections_option(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        session.add(
+            AUDSectionDraft(
+                project_id=project_id,
+                section_id="section-order-capture",
+                title="Order Capture",
+                draft_text="Unreviewed AI draft should be gated.",
+                draft_json=json.dumps({"included_tables": [], "included_images": []}),
+                confidence="medium",
+                review_status="draft",
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            options=docx_generation.DocxGenerationOptions(
+                use_ai_drafts=True,
+                include_draft_sections=False,
+            ),
+        )
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+    assert "Unreviewed AI draft should be gated." not in document_text
+    assert (
+        "Orders are captured from validated FDD source material before fulfillment."
+        in document_text
+    )
+
+
+def test_generate_docx_worker_applies_job_request_options(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        session.add(
+            AUDSectionDraft(
+                project_id=project_id,
+                section_id="section-order-capture",
+                title="Order Capture",
+                draft_text="Worker should not use this draft when option is false.",
+                draft_json=json.dumps({"included_tables": [], "included_images": []}),
+                confidence="medium",
+                review_status="draft",
+            )
+        )
+        job = Job(
+            project_id=project_id,
+            job_type="generate_docx",
+            message=json.dumps(
+                {
+                    "status_message": "DOCX generation job queued.",
+                    "options": {
+                        "use_ai_drafts": True,
+                        "include_draft_sections": False,
+                        "include_images": True,
+                        "include_open_points": True,
+                    },
+                }
+            ),
+        )
+        session.add(job)
+        session.commit()
+
+        process_generate_docx_job(session, job, sleep_seconds=0)
+        generated_document = session.scalar(
+            select(GeneratedDocument).where(GeneratedDocument.project_id == project_id)
+        )
+        assert generated_document is not None
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+    assert "Worker should not use this draft when option is false." not in document_text
+    assert (
+        "Orders are captured from validated FDD source material before fulfillment."
+        in document_text
+    )
+
+
+def test_omitted_ai_draft_excludes_section(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        session.add(
+            AUDSectionDraft(
+                project_id=project_id,
+                section_id="section-order-capture",
+                title="Order Capture",
+                draft_text="This omitted draft should not appear.",
+                draft_json=json.dumps({}),
+                confidence="low",
+                review_status="omitted",
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+    assert "Order Capture" not in document_text
+    assert "This omitted draft should not appear." not in document_text
+    assert (
+        "Orders are captured from validated FDD source material before fulfillment."
+        not in document_text
+    )
+
+
+def test_ai_draft_selected_image_is_included_when_enabled(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    image_storage_path = (
+        f"projects/{project_id}/extracted_images/ppt-file/slide_010_image_001.png"
+    )
+    image_path = storage_root / image_storage_path
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        evidence_item = EvidenceItem(
+            project_id=project_id,
+            evidence_type="image_reference",
+            source_role="kt_ppt",
+            title="Order Capture selected image",
+            text=image_storage_path,
+            json_data=json.dumps(
+                {"slide_number": 10, "image_path": image_storage_path}
+            ),
+            priority=70,
+            confidence="high",
+        )
+        session.add(evidence_item)
+        session.flush()
+        session.add(
+            AUDSectionDraft(
+                project_id=project_id,
+                section_id="section-order-capture",
+                title="Order Capture",
+                draft_text="AI accepted section with a selected image.",
+                draft_json=json.dumps(
+                    {
+                        "included_images": [
+                            {"evidence_item_id": evidence_item.id}
+                        ],
+                        "included_tables": [],
+                    }
+                ),
+                confidence="high",
+                review_status="accepted",
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            options=docx_generation.DocxGenerationOptions(include_images=True),
+        )
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    assert len(document.inline_shapes) == 1
+    assert "Source image from slide 10: Order Capture selected image" in document_text
 
 
 def test_missing_section_content_uses_placeholder(

@@ -26,6 +26,7 @@ from app.workers.local_worker import (
     process_generate_docx_job,
     process_generate_section_drafts_ai_job,
     process_generate_source_summaries_ai_job,
+    process_refine_open_points_ai_job,
     process_transcribe_media_job,
 )
 
@@ -49,6 +50,7 @@ JOB_PROCESSORS: dict[str, JobProcessor] = {
     "generate_source_summaries_ai": process_generate_source_summaries_ai_job,
     "generate_section_drafts_ai": process_generate_section_drafts_ai_job,
     "extract_open_points": process_extract_open_points_job,
+    "refine_open_points_ai": process_refine_open_points_ai_job,
     "generate_docx": process_generate_docx_job,
 }
 

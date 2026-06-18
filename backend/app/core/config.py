@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     OCI_GENAI_MAX_OUTPUT_TOKENS: int = 16000
     SECTION_EVIDENCE_MAX_CHARS: int = 30000
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
+    INTERNAL_DEBUG_OUTPUT: bool = False
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -65,6 +66,7 @@ class Settings(BaseSettings):
         "OCI_DOCUMENT_ENABLE_XLSX",
         "OCI_DOCUMENT_ENABLE_PDF",
         "OCI_DOCUMENT_ENABLE_IMAGES",
+        "INTERNAL_DEBUG_OUTPUT",
         mode="before",
     )
     @classmethod

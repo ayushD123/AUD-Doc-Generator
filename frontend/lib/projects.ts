@@ -48,6 +48,13 @@ export type Job = {
   updated_at: string | null;
 };
 
+export type GenerateDocxJobOptions = {
+  use_ai_drafts?: boolean;
+  include_draft_sections?: boolean;
+  include_images?: boolean;
+  include_open_points?: boolean;
+};
+
 export type ExtractedContent = {
   id: string;
   project_id: string;
@@ -110,6 +117,9 @@ export type AUDPlanJson = {
   generation_basis?: string;
   default_template_required?: boolean;
   sections?: AUDPlanSection[];
+  ai_enhanced_plan?: {
+    sections?: AUDPlanSection[];
+  };
 };
 
 export type OpenPoint = {
@@ -121,6 +131,7 @@ export type OpenPoint = {
   source_file_id: string | null;
   source_content_id: string | null;
   evidence: string | null;
+  refinement_metadata?: Record<string, unknown> | null;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -158,6 +169,19 @@ export type SourceSummary = {
   summary_type: string;
   summary_text: string;
   summary_json: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type AUDSectionDraft = {
+  id: string;
+  project_id: string;
+  section_id: string;
+  title: string;
+  draft_text: string;
+  draft_json: string | null;
+  confidence: string;
+  review_status: string;
   created_at: string | null;
   updated_at: string | null;
 };
@@ -282,6 +306,10 @@ export function listSourceSummaries(projectId: string) {
   return requestJson<SourceSummary[]>(`/projects/${projectId}/source-summaries`);
 }
 
+export function listSectionDrafts(projectId: string) {
+  return requestJson<AUDSectionDraft[]>(`/projects/${projectId}/section-drafts`);
+}
+
 export function getGeneratedDocumentDownloadUrl(
   projectId: string,
   documentId: string,
@@ -313,9 +341,13 @@ export function createExtractOpenPointsJob(projectId: string) {
   });
 }
 
-export function createGenerateDocxJob(projectId: string) {
+export function createGenerateDocxJob(
+  projectId: string,
+  options?: GenerateDocxJobOptions,
+) {
   return requestJson<Job>(`/projects/${projectId}/jobs/generate-docx`, {
     method: "POST",
+    body: options ? JSON.stringify(options) : undefined,
   });
 }
 
@@ -328,6 +360,15 @@ export function createBuildEvidenceIndexJob(projectId: string) {
 export function createGenerateSourceSummariesAiJob(projectId: string) {
   return requestJson<Job>(
     `/projects/${projectId}/jobs/generate-source-summaries-ai`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function createGenerateSectionDraftsAiJob(projectId: string) {
+  return requestJson<Job>(
+    `/projects/${projectId}/jobs/generate-section-drafts-ai`,
     {
       method: "POST",
     },

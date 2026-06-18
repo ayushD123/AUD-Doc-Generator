@@ -1115,13 +1115,41 @@ def process_extract_open_points_job(
     session.commit()
 
 
+def process_refine_open_points_ai_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.open_points_ai_refinement import refine_open_points_ai
+
+    job.status = "running"
+    job.progress = 10
+    job.message = "Refining Open Points with AI."
+    session.commit()
+
+    sleep(sleep_seconds)
+
+    result = refine_open_points_ai(session, job.project_id)
+
+    sleep(sleep_seconds)
+
+    job.status = "completed"
+    job.progress = 100
+    job.message = (
+        f"Refined {len(result.open_points)} open point(s); "
+        f"excluded {len(result.excluded_items)} item(s)."
+    )
+    session.commit()
+
+
 def process_generate_docx_job(
     session: Session,
     job: Job,
     sleep_seconds: float = 0.2,
 ) -> None:
-    from app.services.docx_generation import generate_docx
+    from app.services.docx_generation import generate_docx, parse_docx_generation_options
 
+    options = parse_docx_generation_options(job.message)
     job.status = "running"
     job.progress = 10
     job.message = "Generating DOCX draft."
@@ -1129,7 +1157,11 @@ def process_generate_docx_job(
 
     sleep(sleep_seconds)
 
-    generated_document = generate_docx(session, job.project_id)
+    generated_document = generate_docx(
+        session,
+        job.project_id,
+        options=options,
+    )
 
     sleep(sleep_seconds)
 
@@ -1165,6 +1197,7 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         "build_section_evidence_packs",
                         "generate_section_drafts_ai",
                         "extract_open_points",
+                        "refine_open_points_ai",
                         "generate_docx",
                     ]
                 ),
@@ -1244,6 +1277,12 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                     )
                 elif job.job_type == "extract_open_points":
                     process_extract_open_points_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "refine_open_points_ai":
+                    process_refine_open_points_ai_job(
                         session,
                         job,
                         sleep_seconds=sleep_seconds,

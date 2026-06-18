@@ -620,10 +620,40 @@ def test_create_extract_open_points_job(client: TestClient) -> None:
     assert job["message"] == "Open points extraction job queued."
 
 
+def test_create_refine_open_points_ai_job(client: TestClient) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(f"/projects/{project_id}/jobs/refine-open-points-ai")
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["project_id"] == project_id
+    assert job["job_type"] == "refine_open_points_ai"
+    assert job["status"] == "pending"
+    assert job["progress"] == 0
+    assert job["message"] == "AI Open Points refinement job queued."
+
+
 def test_create_extract_open_points_job_returns_404_for_unknown_project(
     client: TestClient,
 ) -> None:
     response = client.post("/projects/missing-project/jobs/extract-open-points")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
+def test_create_refine_open_points_ai_job_returns_404_for_unknown_project(
+    client: TestClient,
+) -> None:
+    response = client.post("/projects/missing-project/jobs/refine-open-points-ai")
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Project not found."
@@ -648,6 +678,35 @@ def test_create_generate_docx_job(client: TestClient) -> None:
     assert job["status"] == "pending"
     assert job["progress"] == 0
     assert job["message"] == "DOCX generation job queued."
+
+
+def test_create_generate_docx_job_accepts_generation_options(
+    client: TestClient,
+) -> None:
+    project_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Receivables",
+        },
+    )
+    project_id = project_response.json()["id"]
+
+    response = client.post(
+        f"/projects/{project_id}/jobs/generate-docx",
+        json={
+            "use_ai_drafts": True,
+            "include_draft_sections": False,
+            "include_images": False,
+            "include_open_points": True,
+        },
+    )
+
+    assert response.status_code == 201
+    job = response.json()
+    assert job["job_type"] == "generate_docx"
+    assert '"include_draft_sections": false' in job["message"]
+    assert '"include_images": false' in job["message"]
 
 
 def test_create_generate_docx_job_returns_404_for_unknown_project(
