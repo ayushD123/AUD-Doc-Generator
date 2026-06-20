@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, new_uuid, utc_now
 
 if TYPE_CHECKING:
+    from app.models.aud_generation_run import AUDGenerationRun
     from app.models.aud_plan import AUDPlan
     from app.models.aud_section_draft import AUDSectionDraft
     from app.models.evidence_item import EvidenceItem
@@ -79,6 +80,10 @@ class Project(Base):
         cascade="all, delete-orphan",
     )
     section_drafts: Mapped[list["AUDSectionDraft"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+    aud_generation_runs: Mapped[list["AUDGenerationRun"]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
     )

@@ -109,10 +109,67 @@ def build_section_draft_prompt(
     settings: Settings | None = None,
 ) -> str:
     resolved_settings = settings or get_settings()
+    max_chars = get_prompt_body_budget(resolved_settings.OCI_GENAI_MAX_INPUT_CHARS)
+    list_limit = 20
+    text_limit = 900
+
+    while True:
+        prompt = render_section_draft_prompt(
+            pack_payload=compact_pack_payload(
+                pack_payload,
+                list_limit=list_limit,
+                text_limit=text_limit,
+            )
+        )
+
+        if len(prompt) <= max_chars:
+            return prompt
+
+        if list_limit > 5:
+            list_limit = max(5, list_limit // 2)
+        elif text_limit > 180:
+            text_limit = max(180, text_limit // 2)
+        elif list_limit > 0:
+            list_limit = 0
+        else:
+            raise ValueError(
+                "AI section draft prompt cannot fit within the configured "
+                "OCI_GENAI_MAX_INPUT_CHARS safeguard without corrupting JSON input."
+            )
+
+
+def compact_pack_payload(value: Any, *, list_limit: int, text_limit: int) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: compact_pack_payload(
+                item,
+                list_limit=list_limit,
+                text_limit=text_limit,
+            )
+            for key, item in value.items()
+        }
+
+    if isinstance(value, list):
+        return [
+            compact_pack_payload(
+                item,
+                list_limit=list_limit,
+                text_limit=text_limit,
+            )
+            for item in value[:list_limit]
+        ]
+
+    if isinstance(value, str) and len(value) > text_limit:
+        return f"{value[:text_limit].rstrip()}..."
+
+    return value
+
+
+def render_section_draft_prompt(pack_payload: dict[str, Any]) -> str:
     section_id = str(pack_payload.get("section_id") or "")
     section_title = str(pack_payload.get("section_title") or "")
     evidence_pack = json.dumps(pack_payload, ensure_ascii=False, separators=(",", ":"))
-    prompt = f"""
+    return f"""
 You are a senior Oracle SCM functional consultant preparing an Application Understanding Document section.
 
 Business rules:
@@ -126,6 +183,13 @@ Business rules:
 - Write Word-document-ready prose in draft_text.
 - Do not include citations inside draft_text.
 - Preserve used evidence item IDs in used_evidence_item_ids.
+
+Writing style:
+- Professional Oracle consulting document tone.
+- Clear and business-readable.
+- Preserve exact configuration names and values when provided.
+- Do not mention unsupported generic Oracle functionality.
+- Do not include citations in draft_text.
 
 Return strict JSON only with this exact object shape:
 {{
@@ -143,13 +207,8 @@ Return strict JSON only with this exact object shape:
 
 Evidence pack:
 {evidence_pack}
+End evidence pack.
 """.strip()
-    max_chars = get_prompt_body_budget(resolved_settings.OCI_GENAI_MAX_INPUT_CHARS)
-
-    if len(prompt) <= max_chars:
-        return prompt
-
-    return prompt[:max_chars].rstrip()
 
 
 def normalize_section_draft_payload(

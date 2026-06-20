@@ -1,3 +1,4 @@
+import json
 from collections.abc import Generator
 from pathlib import Path
 
@@ -163,7 +164,7 @@ def test_invalid_json_warning_behavior_continues_other_sources(
     client_and_session: tuple[TestClient, sessionmaker],
 ) -> None:
     _, session_local = client_and_session
-    fake_llm = FakeLLMService(fail_on_prompt="Source role: fdd")
+    fake_llm = FakeLLMService(fail_on_prompt='"source_role":"fdd"')
 
     with session_local() as session:
         project, _ = create_project_with_evidence(session, source_role="fdd")
@@ -272,6 +273,38 @@ def test_source_summary_prompt_reserves_space_for_llm_wrapper_text() -> None:
     prompt = build_source_summary_prompt(group, settings=settings)
 
     assert len(prompt) <= get_prompt_body_budget(settings.OCI_GENAI_MAX_INPUT_CHARS)
+    assert prompt.endswith("Do not include markdown or commentary.")
+    json.loads(prompt.split("Inputs:\n", 1)[1].split("\n\nFinal reminder:", 1)[0])
+
+
+def test_source_summary_prompt_bounds_without_cutting_prompt_tail() -> None:
+    settings = Settings(OCI_GENAI_MAX_INPUT_CHARS=9000, _env_file=None)
+    group = EvidenceSourceGroup(
+        source_uploaded_file_id="file-1",
+        source_role="kt_transcript",
+        evidence_items=[
+            EvidenceItem(
+                project_id="project-1",
+                evidence_type="transcript",
+                source_role="kt_transcript",
+                title=f"Topic {index}",
+                text="Detailed transcript evidence. " * 200,
+                priority=80,
+                confidence="medium",
+            )
+            for index in range(80)
+        ],
+    )
+
+    prompt = build_source_summary_prompt(group, settings=settings)
+
+    assert len(prompt) <= get_prompt_body_budget(settings.OCI_GENAI_MAX_INPUT_CHARS)
+    assert "Return strict JSON only" in prompt
+    assert prompt.endswith("Do not include markdown or commentary.")
+    inputs = json.loads(
+        prompt.split("Inputs:\n", 1)[1].split("\n\nFinal reminder:", 1)[0]
+    )
+    assert isinstance(inputs["evidence_items"], list)
 
 
 def test_list_source_summaries(

@@ -118,12 +118,55 @@ def build_source_summary_prompt(
     resolved_settings = settings or get_settings()
     role_instruction = get_source_role_instruction(group.source_role)
     prompt_budget = get_prompt_body_budget(resolved_settings.OCI_GENAI_MAX_INPUT_CHARS)
-    evidence_block = build_bounded_evidence_block(
-        group.evidence_items,
-        max_chars=max(2000, prompt_budget - 6000),
-    )
+    evidence_item_limit = len(group.evidence_items)
+    evidence_preview_chars = EVIDENCE_PREVIEW_CHAR_LIMIT
 
-    prompt = f"""
+    while True:
+        prompt = render_source_summary_prompt(
+            group=group,
+            role_instruction=role_instruction,
+            evidence_items=group.evidence_items[:evidence_item_limit],
+            evidence_preview_chars=evidence_preview_chars,
+            evidence_max_chars=max(2000, prompt_budget - 6000),
+        )
+
+        if len(prompt) <= prompt_budget:
+            return prompt
+
+        if evidence_item_limit > 10:
+            evidence_item_limit = max(10, evidence_item_limit // 2)
+        elif evidence_preview_chars > 160:
+            evidence_preview_chars = max(160, evidence_preview_chars // 2)
+        elif evidence_item_limit > 0:
+            evidence_item_limit = 0
+        else:
+            raise ValueError(
+                "AI source summary prompt cannot fit within the configured "
+                "OCI_GENAI_MAX_INPUT_CHARS safeguard without truncating evidence."
+            )
+
+
+def render_source_summary_prompt(
+    *,
+    group: EvidenceSourceGroup,
+    role_instruction: str,
+    evidence_items: list[EvidenceItem],
+    evidence_preview_chars: int,
+    evidence_max_chars: int,
+) -> str:
+    evidence_items_payload = build_bounded_evidence_payload(
+        evidence_items,
+        max_chars=evidence_max_chars,
+        preview_chars=evidence_preview_chars,
+    )
+    prompt_payload = {
+        "source_role": group.source_role,
+        "source_uploaded_file_id": group.source_uploaded_file_id,
+        "role_instruction": role_instruction,
+        "evidence_items": evidence_items_payload,
+    }
+
+    return f"""
 Create a concise source summary for AUD preparation.
 
 Rules:
@@ -132,12 +175,6 @@ Rules:
 - Mark missing, unclear, or unsupported information explicitly.
 - Keep the summary concise and suitable for later AUD planning.
 - Preserve source meaning and do not overstate confidence.
-
-Source role: {group.source_role}
-Source uploaded file id: {group.source_uploaded_file_id or "not available"}
-
-Role-specific instruction:
-{role_instruction}
 
 Return strict JSON only with this exact object shape:
 {{
@@ -152,14 +189,14 @@ Return strict JSON only with this exact object shape:
   "aud_usage_guidance": "..."
 }}
 
-Evidence:
-{evidence_block}
+Inputs:
+{json.dumps(prompt_payload, ensure_ascii=False, separators=(",", ":"))}
+
+Final reminder:
+- Return one JSON object only.
+- Do not return a list.
+- Do not include markdown or commentary.
 """.strip()
-
-    if len(prompt) > prompt_budget:
-        return prompt[:prompt_budget].rstrip()
-
-    return prompt
 
 
 def get_source_role_instruction(source_role: str) -> str:
@@ -204,6 +241,7 @@ def get_source_role_instruction(source_role: str) -> str:
 def build_bounded_evidence_block(
     evidence_items: list[EvidenceItem],
     max_chars: int,
+    preview_chars: int = EVIDENCE_PREVIEW_CHAR_LIMIT,
 ) -> str:
     lines: list[str] = []
     used_chars = 0
@@ -217,8 +255,8 @@ def build_bounded_evidence_block(
         if not text:
             text = "<No text evidence available>"
 
-        if len(text) > EVIDENCE_PREVIEW_CHAR_LIMIT:
-            text = f"{text[:EVIDENCE_PREVIEW_CHAR_LIMIT].rstrip()}\n<evidence truncated>"
+        if len(text) > preview_chars:
+            text = f"{text[:preview_chars].rstrip()}\n<evidence truncated>"
 
         line = (
             f"[{index}] type={item.evidence_type}; "
@@ -234,6 +272,52 @@ def build_bounded_evidence_block(
         used_chars += len(line)
 
     return "\n".join(lines) if lines else "<No evidence available>"
+
+
+def build_bounded_evidence_payload(
+    evidence_items: list[EvidenceItem],
+    max_chars: int,
+    preview_chars: int = EVIDENCE_PREVIEW_CHAR_LIMIT,
+) -> list[dict[str, object]]:
+    payload: list[dict[str, object]] = []
+    used_chars = 0
+
+    for index, item in enumerate(
+        sorted(evidence_items, key=lambda evidence: (-evidence.priority, evidence.created_at)),
+        start=1,
+    ):
+        text = (item.text or "").strip().replace("\r\n", "\n")
+
+        if not text:
+            text = "<No text evidence available>"
+
+        if len(text) > preview_chars:
+            text = f"{text[:preview_chars].rstrip()}\n<evidence truncated>"
+
+        entry = {
+            "index": index,
+            "evidence_type": item.evidence_type,
+            "title": item.title or "Untitled",
+            "priority": item.priority,
+            "confidence": item.confidence,
+            "text": text,
+        }
+        entry_chars = len(json.dumps(entry, ensure_ascii=False))
+
+        if used_chars + entry_chars > max_chars:
+            payload.append(
+                {
+                    "index": index,
+                    "omitted": True,
+                    "reason": "additional evidence omitted due to prompt length limit",
+                }
+            )
+            break
+
+        payload.append(entry)
+        used_chars += entry_chars
+
+    return payload
 
 
 def upsert_source_summary(

@@ -30,6 +30,69 @@ EXPECTED_CONTENT_TYPES = {
 CONTENT_PRIORITIES = {"fdd", "ppt", "transcript", "config", "mixed"}
 MISSING_INFO_HANDLING_VALUES = {"omit", "placeholder", "open_point", "blank"}
 CONFIDENCE_VALUES = {"high", "medium", "low"}
+JSON_SCHEMA_MARKER_KEYS = {"$schema", "additionalProperties", "properties", "required"}
+JSON_SCHEMA_VALUE_KEYS = {
+    "$schema",
+    "additionalProperties",
+    "allOf",
+    "anyOf",
+    "default",
+    "description",
+    "enum",
+    "examples",
+    "format",
+    "items",
+    "maxItems",
+    "minItems",
+    "oneOf",
+    "properties",
+    "required",
+    "title",
+    "type",
+}
+AUD_PLAN_JSON_RETRY_SYSTEM_PROMPT = (
+    "The previous AUD plan enhancement response could not be parsed as JSON. "
+    "Return exactly one complete JSON object with top-level document_strategy "
+    "and sections. Close every object and array. Do not include markdown, prose, "
+    "comments, examples, ellipses, or trailing commas."
+)
+AUD_PLAN_SCHEMA_RETRY_SYSTEM_PROMPT = (
+    "The previous AUD plan enhancement response parsed as JSON but did not match "
+    "the required AUD plan schema. Return exactly one complete JSON object with "
+    "top-level document_strategy and sections. The sections value must be an "
+    "array of section objects. Do not return schema definitions, examples, "
+    "section maps, markdown, prose, or the deterministic_aud_plan input object."
+)
+AUD_PLAN_WRAPPER_KEYS = (
+    "ai_enhanced_plan",
+    "enhanced_aud_plan",
+    "enhanced_plan",
+    "aud_generation_plan",
+    "document_plan",
+    "aud_plan",
+    "plan",
+    "output",
+    "result",
+    "response",
+)
+AUD_PLAN_SECTION_KEYS = (
+    "sections",
+    "aud_sections",
+    "aud_document_sections",
+    "aud_plan_sections",
+    "aud_outline",
+    "document_outline",
+    "enhanced_sections",
+    "enhanced_aud_sections",
+    "document_sections",
+    "outline",
+    "recommended_sections",
+    "section_mapping",
+    "section_plan",
+    "section_recommendations",
+    "sections_to_include",
+    "plan_sections",
+)
 
 
 def get_latest_aud_plan(session: Session, project_id: str) -> AUDPlan | None:
@@ -123,12 +186,15 @@ def compact_plan_for_prompt(plan_payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def compact_source_summary(summary: SourceSummary) -> dict[str, Any]:
+def compact_source_summary(
+    summary: SourceSummary,
+    preview_chars: int = SOURCE_SUMMARY_PREVIEW_CHARS,
+) -> dict[str, Any]:
     summary_json = parse_json_object(summary.summary_json)
     summary_text = summary.summary_text.strip()
 
-    if len(summary_text) > SOURCE_SUMMARY_PREVIEW_CHARS:
-        summary_text = f"{summary_text[:SOURCE_SUMMARY_PREVIEW_CHARS].rstrip()}..."
+    if len(summary_text) > preview_chars:
+        summary_text = f"{summary_text[:preview_chars].rstrip()}..."
 
     return {
         "id": summary.id,
@@ -149,11 +215,14 @@ def compact_source_summary(summary: SourceSummary) -> dict[str, Any]:
     }
 
 
-def compact_evidence_item(evidence_item: EvidenceItem) -> dict[str, Any]:
+def compact_evidence_item(
+    evidence_item: EvidenceItem,
+    preview_chars: int = EVIDENCE_TEXT_PREVIEW_CHARS,
+) -> dict[str, Any]:
     text = (evidence_item.text or "").strip()
 
-    if len(text) > EVIDENCE_TEXT_PREVIEW_CHARS:
-        text = f"{text[:EVIDENCE_TEXT_PREVIEW_CHARS].rstrip()}..."
+    if len(text) > preview_chars:
+        text = f"{text[:preview_chars].rstrip()}..."
 
     return {
         "id": evidence_item.id,
@@ -176,17 +245,69 @@ def build_enhance_aud_plan_prompt(
     settings: Settings | None = None,
 ) -> str:
     resolved_settings = settings or get_settings()
+    max_chars = get_prompt_body_budget(resolved_settings.OCI_GENAI_MAX_INPUT_CHARS)
+    source_summary_limit = len(source_summaries)
+    evidence_limit = len(evidence_items)
+    source_summary_preview_chars = SOURCE_SUMMARY_PREVIEW_CHARS
+    evidence_preview_chars = EVIDENCE_TEXT_PREVIEW_CHARS
+
+    while True:
+        prompt = render_enhance_aud_plan_prompt(
+            deterministic_plan=deterministic_plan,
+            source_priority_report=source_priority_report,
+            source_summaries=source_summaries[:source_summary_limit],
+            evidence_items=evidence_items[:evidence_limit],
+            source_summary_preview_chars=source_summary_preview_chars,
+            evidence_preview_chars=evidence_preview_chars,
+        )
+
+        if len(prompt) <= max_chars:
+            return prompt
+
+        if evidence_limit > 10:
+            evidence_limit = max(10, evidence_limit // 2)
+        elif source_summary_limit > 5:
+            source_summary_limit = max(5, source_summary_limit // 2)
+        elif evidence_preview_chars > 120:
+            evidence_preview_chars = max(120, evidence_preview_chars // 2)
+        elif source_summary_preview_chars > 200:
+            source_summary_preview_chars = max(200, source_summary_preview_chars // 2)
+        elif evidence_limit > 0:
+            evidence_limit = 0
+        elif source_summary_limit > 0:
+            source_summary_limit = 0
+        else:
+            raise ValueError(
+                "AI AUD plan enhancement prompt cannot fit within the configured "
+                "OCI_GENAI_MAX_INPUT_CHARS safeguard without corrupting JSON input."
+            )
+
+
+def render_enhance_aud_plan_prompt(
+    *,
+    deterministic_plan: dict[str, Any],
+    source_priority_report: dict[str, Any],
+    source_summaries: list[SourceSummary],
+    evidence_items: list[EvidenceItem],
+    source_summary_preview_chars: int,
+    evidence_preview_chars: int,
+) -> str:
     prompt_payload = {
         "deterministic_aud_plan": compact_plan_for_prompt(deterministic_plan),
         "source_priority_report": source_priority_report,
         "source_summaries": [
-            compact_source_summary(summary) for summary in source_summaries
+            compact_source_summary(summary, preview_chars=source_summary_preview_chars)
+            for summary in source_summaries
         ],
         "top_evidence_items": [
-            compact_evidence_item(evidence_item) for evidence_item in evidence_items
+            compact_evidence_item(
+                evidence_item,
+                preview_chars=evidence_preview_chars,
+            )
+            for evidence_item in evidence_items
         ],
     }
-    prompt = f"""
+    return f"""
 Enhance the deterministic AUD plan for later AUD drafting.
 
 Authoritative business rules:
@@ -241,15 +362,16 @@ Output limits:
 - Use empty arrays for image_strategy, table_strategy, and open_point_candidates if uncertain.
 - Do not write draft section content.
 
+Final reminder:
+- Return one JSON object only.
+- The top-level object must contain document_strategy and sections.
+- Use the key sections exactly; do not use aud_sections, enhanced_sections, document_sections, section_plan, or plan_sections.
+- Do not return the deterministic_aud_plan input object.
+- Do not wrap the answer in another key unless that key is ai_enhanced_plan.
+
 Inputs:
 {json.dumps(prompt_payload, ensure_ascii=False, separators=(",", ":"))}
 """.strip()
-
-    max_chars = get_prompt_body_budget(resolved_settings.OCI_GENAI_MAX_INPUT_CHARS)
-    if len(prompt) <= max_chars:
-        return prompt
-
-    return prompt[:max_chars].rstrip()
 
 
 def ensure_list(value: Any) -> list[Any]:
@@ -271,14 +393,18 @@ def validate_and_normalize_ai_plan(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise LLMInvalidJSONError("Enhanced AUD plan response must be a JSON object.")
 
+    payload = unwrap_ai_plan_payload(payload)
     document_strategy = payload.get("document_strategy")
-    sections = payload.get("sections")
-
-    if not isinstance(document_strategy, dict):
-        raise LLMInvalidJSONError("Enhanced AUD plan missing document_strategy.")
+    sections = extract_ai_plan_sections(payload)
 
     if not isinstance(sections, list):
-        raise LLMInvalidJSONError("Enhanced AUD plan missing sections list.")
+        raise LLMInvalidJSONError(
+            "Enhanced AUD plan missing sections list. "
+            f"Payload preview: {build_payload_preview(payload)}"
+        )
+
+    if not isinstance(document_strategy, dict):
+        document_strategy = build_default_document_strategy(payload)
 
     normalized_sections: list[dict[str, Any]] = []
 
@@ -357,6 +483,169 @@ def validate_and_normalize_ai_plan(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def unwrap_ai_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if has_direct_ai_plan_sections(payload):
+        return payload
+
+    for key in AUD_PLAN_WRAPPER_KEYS:
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            unwrapped = unwrap_ai_plan_payload(nested)
+            if (
+                isinstance(payload.get("document_strategy"), dict)
+                and "document_strategy" not in unwrapped
+            ):
+                return {**unwrapped, "document_strategy": payload["document_strategy"]}
+            return unwrapped
+
+    return payload
+
+
+def has_direct_ai_plan_sections(payload: dict[str, Any]) -> bool:
+    for key in AUD_PLAN_SECTION_KEYS:
+        value = payload.get(key)
+        if normalize_sections_candidate(value):
+            return True
+
+    return False
+
+
+def extract_ai_plan_sections(payload: dict[str, Any]) -> list[Any] | None:
+    for key in AUD_PLAN_SECTION_KEYS:
+        sections = normalize_sections_candidate(payload.get(key))
+        if sections:
+            return sections
+
+    for key, value in payload.items():
+        if key in {"document_strategy", "image_strategy", "table_strategy"}:
+            continue
+        if any(token in key.lower() for token in ("section", "outline")):
+            sections = normalize_sections_candidate(value)
+            if sections:
+                return sections
+        if isinstance(value, dict):
+            nested_sections = extract_ai_plan_sections(value)
+            if nested_sections:
+                return nested_sections
+
+    return None
+
+
+def normalize_sections_candidate(value: Any) -> list[Any] | None:
+    if isinstance(value, list):
+        return value
+
+    if not isinstance(value, dict):
+        return None
+
+    nested_sections = value.get("sections")
+    if isinstance(nested_sections, list):
+        return nested_sections
+
+    if is_json_schema_like_dict(value):
+        return None
+
+    section_items: list[dict[str, Any]] = []
+    for title, details in value.items():
+        if isinstance(details, dict):
+            if is_json_schema_like_dict(details):
+                continue
+            section = dict(details)
+            section.setdefault("title", str(title))
+            section_items.append(section)
+        elif isinstance(details, str):
+            section_items.append({"title": str(title), "reason": details})
+
+    if not section_items:
+        return None
+
+    if any(str(section.get("title") or "").strip() for section in section_items):
+        return section_items
+
+    return None
+
+
+def is_json_schema_like_dict(value: dict[str, Any]) -> bool:
+    keys = set(value.keys())
+
+    if JSON_SCHEMA_MARKER_KEYS & keys:
+        return True
+
+    if "type" not in keys:
+        return False
+
+    return keys <= JSON_SCHEMA_VALUE_KEYS
+
+
+def build_payload_preview(payload: dict[str, Any]) -> str:
+    try:
+        preview = json.dumps(payload, ensure_ascii=False)
+    except TypeError:
+        preview = str(payload)
+
+    preview = " ".join(preview.split())
+    if len(preview) > 700:
+        preview = f"{preview[:700].rstrip()}..."
+    return preview or "<empty object>"
+
+
+def build_default_document_strategy(payload: dict[str, Any]) -> dict[str, Any]:
+    warnings = normalize_string_list(payload.get("warnings"))
+    warnings.append(
+        "LLM omitted document_strategy; backend applied source-priority defaults."
+    )
+    return {
+        "template_source": str(
+            payload.get("template_source") or "default_or_uploaded_template"
+        ),
+        "content_golden_source": str(
+            payload.get("content_golden_source") or "fdd_if_present"
+        ),
+        "default_template_required": normalize_bool(
+            payload.get("default_template_required", False)
+        ),
+        "notes": warnings,
+    }
+
+
+def generate_validated_enhanced_plan(
+    llm_service: LLMService,
+    prompt: str,
+) -> dict[str, Any]:
+    first_error: LLMInvalidJSONError | None = None
+    last_error: LLMInvalidJSONError | None = None
+    retry_system_prompt = AUD_PLAN_SCHEMA_RETRY_SYSTEM_PROMPT
+
+    for attempt_index in range(2):
+        system_prompt = None if attempt_index == 0 else retry_system_prompt
+        try:
+            enhanced_payload = llm_service.generate_json(
+                prompt,
+                system_prompt=system_prompt,
+                schema_name="aud_plan_ai_enhancement",
+            )
+        except LLMInvalidJSONError as error:
+            if first_error is None:
+                first_error = error
+            last_error = error
+            retry_system_prompt = AUD_PLAN_JSON_RETRY_SYSTEM_PROMPT
+            continue
+
+        try:
+            return validate_and_normalize_ai_plan(enhanced_payload)
+        except LLMInvalidJSONError as error:
+            if first_error is None:
+                first_error = error
+            last_error = error
+            retry_system_prompt = AUD_PLAN_SCHEMA_RETRY_SYSTEM_PROMPT
+            continue
+
+    assert last_error is not None
+    if first_error is not last_error:
+        raise last_error from first_error
+    raise last_error
+
+
 def enhance_aud_plan_ai(
     session: Session,
     project_id: str,
@@ -383,11 +672,10 @@ def enhance_aud_plan_ai(
         settings=resolved_settings,
     )
     resolved_llm_service = llm_service or build_llm_service(resolved_settings)
-    enhanced_payload = resolved_llm_service.generate_json(
+    normalized_enhanced_plan = generate_validated_enhanced_plan(
+        resolved_llm_service,
         prompt,
-        schema_name="aud_plan_ai_enhancement",
     )
-    normalized_enhanced_plan = validate_and_normalize_ai_plan(enhanced_payload)
     updated_plan = dict(deterministic_plan)
     updated_plan["ai_enhanced_plan"] = normalized_enhanced_plan
     aud_plan.plan_json = json.dumps(updated_plan, indent=2, ensure_ascii=False)

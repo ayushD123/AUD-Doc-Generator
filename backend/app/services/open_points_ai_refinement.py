@@ -336,14 +336,65 @@ def build_refine_open_points_prompt(
     settings: Settings | None = None,
 ) -> str:
     resolved_settings = settings or get_settings()
+    max_chars = get_prompt_body_budget(resolved_settings.OCI_GENAI_MAX_INPUT_CHARS)
+    existing_limit = len(existing_open_points)
+    candidate_limit = len(candidates)
+    fdd_context_limit = len(fdd_context)
+    text_preview_chars = TEXT_PREVIEW_CHARS
+
+    while True:
+        prompt = render_refine_open_points_prompt(
+            existing_open_points=existing_open_points[:existing_limit],
+            candidates=candidates[:candidate_limit],
+            fdd_context=fdd_context[:fdd_context_limit],
+            text_preview_chars=text_preview_chars,
+        )
+
+        if len(prompt) <= max_chars:
+            return prompt
+
+        if candidate_limit > 40:
+            candidate_limit = max(40, candidate_limit // 2)
+        elif existing_limit > 25:
+            existing_limit = max(25, existing_limit // 2)
+        elif text_preview_chars > 160:
+            text_preview_chars = max(160, text_preview_chars // 2)
+        elif fdd_context_limit > 3:
+            fdd_context_limit = max(3, fdd_context_limit // 2)
+        elif candidate_limit > 0:
+            candidate_limit = 0
+        elif existing_limit > 0:
+            existing_limit = 0
+        elif fdd_context_limit > 0:
+            fdd_context_limit = 0
+        else:
+            raise ValueError(
+                "AI Open Points refinement prompt cannot fit within the configured "
+                "OCI_GENAI_MAX_INPUT_CHARS safeguard without corrupting JSON input."
+            )
+
+
+def render_refine_open_points_prompt(
+    *,
+    existing_open_points: list[OpenPoint],
+    candidates: list[OpenPointCandidateContext],
+    fdd_context: list[dict[str, str]],
+    text_preview_chars: int,
+) -> str:
     prompt_payload = {
         "existing_open_points": [
             {
                 "id": open_point.id,
                 "topic": open_point.topic,
-                "question": truncate_text(open_point.question),
+                "question": truncate_text(
+                    open_point.question,
+                    limit=text_preview_chars,
+                ),
                 "status": open_point.status,
-                "evidence": truncate_text(get_open_point_evidence_text(open_point)),
+                "evidence": truncate_text(
+                    get_open_point_evidence_text(open_point),
+                    limit=text_preview_chars,
+                ),
             }
             for open_point in existing_open_points
         ],
@@ -353,14 +404,23 @@ def build_refine_open_points_prompt(
                 "source": candidate.source,
                 "topic": candidate.topic,
                 "source_role": candidate.source_role,
-                "text": truncate_text(candidate.text),
+                "text": truncate_text(candidate.text, limit=text_preview_chars),
                 "evidence_item_ids": candidate.evidence_item_ids or [],
             }
             for candidate in candidates
         ],
-        "fdd_context": fdd_context,
+        "fdd_context": [
+            {
+                "id": item.get("id"),
+                "summary_text": truncate_text(
+                    str(item.get("summary_text") or ""),
+                    limit=text_preview_chars,
+                ),
+            }
+            for item in fdd_context
+        ],
     }
-    prompt = f"""
+    return f"""
 Refine Open Points for an Oracle Application Understanding Document.
 
 Business rules:
@@ -396,12 +456,6 @@ Return strict JSON only with this exact object shape:
 Inputs:
 {json.dumps(prompt_payload, ensure_ascii=False, separators=(",", ":"))}
 """.strip()
-    max_chars = get_prompt_body_budget(resolved_settings.OCI_GENAI_MAX_INPUT_CHARS)
-
-    if len(prompt) <= max_chars:
-        return prompt
-
-    return prompt[:max_chars].rstrip()
 
 
 def is_screenshot_timestamp_without_manual_action(text: str) -> bool:

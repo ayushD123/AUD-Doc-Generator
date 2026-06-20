@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes_aud_plan import router as aud_plan_router
+from app.api.routes_aud_generation import router as aud_generation_router
 from app.api.routes_dev import router as dev_router
 from app.api.routes_evidence_items import router as evidence_items_router
 from app.api.routes_extracted_content import router as extracted_content_router
@@ -53,6 +54,7 @@ def create_app(create_tables_on_startup: bool = True) -> FastAPI:
     application.include_router(section_drafts_router)
     application.include_router(source_priority_router)
     application.include_router(aud_plan_router)
+    application.include_router(aud_generation_router)
     application.include_router(open_points_router)
     application.include_router(generated_documents_router)
     return application

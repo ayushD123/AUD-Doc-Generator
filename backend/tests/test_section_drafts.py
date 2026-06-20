@@ -14,7 +14,10 @@ from app.main import create_app
 from app.models import AUDSectionDraft, OpenPoint, Project, SectionEvidencePack
 from app.services.job_queue import LocalJobQueueService, get_job_queue_service
 from app.services.llm import LLMInvalidJSONError
-from app.services.section_drafting_ai import generate_section_drafts_ai
+from app.services.section_drafting_ai import (
+    build_section_draft_prompt,
+    generate_section_drafts_ai,
+)
 
 
 class FakeDraftLLMService:
@@ -180,6 +183,38 @@ def test_invalid_json_is_handled_as_warning(tmp_path: Path) -> None:
     finally:
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
+
+
+def test_section_draft_prompt_bounds_without_corrupting_pack_json() -> None:
+    settings = Settings(OCI_GENAI_MAX_INPUT_CHARS=9000, _env_file=None)
+    pack_payload = {
+        "section_id": "section-001-enterprise-structure",
+        "section_title": "Enterprise Structure",
+        "primary_evidence": [
+            {
+                "evidence_item_id": f"evidence-{index}",
+                "source_role": "fdd",
+                "text": "Detailed section evidence. " * 200,
+                "priority": 100,
+            }
+            for index in range(80)
+        ],
+        "supporting_evidence": [],
+        "configuration_evidence": [],
+        "transcript_context": [],
+        "image_candidates": [],
+        "table_candidates": [],
+    }
+
+    prompt = build_section_draft_prompt(pack_payload, settings=settings)
+    pack_json = prompt.split("Evidence pack:\n", 1)[1].rsplit(
+        "\nEnd evidence pack.",
+        1,
+    )[0]
+
+    assert len(prompt) <= 9000
+    assert prompt.endswith("End evidence pack.")
+    json.loads(pack_json)
 
 
 def test_no_supported_evidence_forces_placeholder_and_low_confidence(

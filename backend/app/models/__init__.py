@@ -1,4 +1,5 @@
 from app.models.aud_plan import AUDPlan
+from app.models.aud_generation_run import AUDGenerationRun
 from app.models.aud_section_draft import AUDSectionDraft
 from app.models.evidence_item import EvidenceItem
 from app.models.extracted_content import ExtractedContent
@@ -12,6 +13,7 @@ from app.models.uploaded_file import UploadedFile
 
 __all__ = [
     "AUDPlan",
+    "AUDGenerationRun",
     "AUDSectionDraft",
     "EvidenceItem",
     "ExtractedContent",

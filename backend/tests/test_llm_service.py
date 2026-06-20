@@ -33,6 +33,73 @@ def test_json_fence_stripping() -> None:
     }
 
 
+def test_parse_json_response_extracts_object_from_surrounding_text() -> None:
+    assert parse_json_response('Here is the JSON:\n{"status":"ok"}\nDone.') == {
+        "status": "ok"
+    }
+
+
+def test_parse_json_response_extracts_fenced_object_with_trailing_text() -> None:
+    value = '```json\n{"message":"brace } inside string","status":"ok"}\n```\nDone.'
+
+    assert parse_json_response(value) == {
+        "message": "brace } inside string",
+        "status": "ok",
+    }
+
+
+def test_parse_json_response_skips_bad_object_before_valid_object() -> None:
+    value = 'Example: {"status": ok}\nActual:\n{"status":"ok"}'
+
+    assert parse_json_response(value) == {"status": "ok"}
+
+
+def test_parse_json_response_prefers_complete_object_over_small_example() -> None:
+    value = (
+        'Example shape: {"template_source":"default_scm_template"}\n'
+        'Actual response:\n'
+        '{"document_strategy":{"template_source":"default_scm_template"},'
+        '"sections":[{"title":"Order Capture"}]}'
+    )
+
+    assert parse_json_response(value) == {
+        "document_strategy": {"template_source": "default_scm_template"},
+        "sections": [{"title": "Order Capture"}],
+    }
+
+
+def test_parse_json_response_repairs_truncated_object_end() -> None:
+    value = (
+        '{"document_strategy":{"template_source":"default_scm_template"},'
+        '"sections":[{"title":"Order Capture"}'
+    )
+
+    assert parse_json_response(value) == {
+        "document_strategy": {"template_source": "default_scm_template"},
+        "sections": [{"title": "Order Capture"}],
+    }
+
+
+def test_parse_json_response_repairs_truncated_array_after_comma() -> None:
+    value = '{"sections":[{"title":"Order Capture"},'
+
+    assert parse_json_response(value) == {
+        "sections": [{"title": "Order Capture"}],
+    }
+
+
+def test_parse_json_response_removes_trailing_commas() -> None:
+    value = '{"sections":[{"title":"Order Capture",},],}'
+
+    assert parse_json_response(value) == {
+        "sections": [{"title": "Order Capture"}],
+    }
+
+
+def test_parse_json_response_accepts_single_object_array() -> None:
+    assert parse_json_response('[{"status":"ok"}]') == {"status": "ok"}
+
+
 def test_invalid_json_raises_clean_error() -> None:
     with pytest.raises(LLMInvalidJSONError, match="not valid JSON"):
         parse_json_response("status: ok")

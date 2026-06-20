@@ -15,15 +15,24 @@ from app.models import AUDPlan, EvidenceItem, Project, SourceSummary, UploadedFi
 from app.services.aud_plan_ai_enhancement import (
     build_enhance_aud_plan_prompt,
     enhance_aud_plan_ai,
+    validate_and_normalize_ai_plan,
 )
 from app.services.llm import LLMInvalidJSONError
 from app.services.llm.base import get_prompt_body_budget
 
 
 class FakeAUDPlanLLMService:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(
+        self,
+        fail: bool = False,
+        failures_before_success: int = 0,
+        responses: list[dict | Exception] | None = None,
+    ) -> None:
         self.fail = fail
+        self.failures_before_success = failures_before_success
+        self.responses = responses or []
         self.prompts: list[str] = []
+        self.system_prompts: list[str | None] = []
 
     def generate_text(
         self,
@@ -40,9 +49,18 @@ class FakeAUDPlanLLMService:
         schema_name: str | None = None,
     ) -> dict:
         self.prompts.append(prompt)
+        self.system_prompts.append(system_prompt)
 
-        if self.fail:
+        if self.fail or self.failures_before_success > 0:
+            if self.failures_before_success > 0:
+                self.failures_before_success -= 1
             raise LLMInvalidJSONError("LLM response was not valid JSON.")
+
+        if self.responses:
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return response
 
         return {
             "document_strategy": {
@@ -278,6 +296,7 @@ def test_enhancement_prompt_reserves_space_for_llm_wrapper_text() -> None:
     )
 
     assert len(prompt) <= get_prompt_body_budget(settings.OCI_GENAI_MAX_INPUT_CHARS)
+    json.loads(prompt.split("Inputs:\n", 1)[1])
 
 
 def test_enhancement_prompt_requests_compact_output_and_compacts_plan_sections() -> None:
@@ -301,6 +320,135 @@ def test_enhancement_prompt_requests_compact_output_and_compacts_plan_sections()
     assert "Return no more than 25 sections" in prompt
     assert "Do not write draft section content" in prompt
     assert "large_unused_field" not in prompt
+
+
+def test_enhanced_plan_accepts_sections_only_response_with_default_strategy() -> None:
+    normalized = validate_and_normalize_ai_plan(
+        {
+            "sections": [
+                {
+                    "title": "Order Capture",
+                    "source_roles": ["fdd"],
+                    "content_priority": "fdd",
+                }
+            ]
+        }
+    )
+
+    assert normalized["document_strategy"]["content_golden_source"] == "fdd_if_present"
+    assert normalized["sections"][0]["title"] == "Order Capture"
+
+
+def test_enhanced_plan_accepts_nested_ai_enhanced_plan_response() -> None:
+    normalized = validate_and_normalize_ai_plan(
+        {
+            "ai_enhanced_plan": {
+                "document_strategy": {
+                    "template_source": "default_scm_template",
+                    "content_golden_source": "fdd",
+                    "default_template_required": True,
+                    "notes": [],
+                },
+                "sections": [{"title": "Order Capture"}],
+            }
+        }
+    )
+
+    assert normalized["document_strategy"]["content_golden_source"] == "fdd"
+    assert normalized["sections"][0]["title"] == "Order Capture"
+
+
+def test_enhanced_plan_accepts_section_alias_response() -> None:
+    normalized = validate_and_normalize_ai_plan(
+        {
+            "document_strategy": {
+                "template_source": "default_scm_template",
+                "content_golden_source": "fdd",
+                "default_template_required": True,
+                "notes": [],
+            },
+            "enhanced_sections": [{"title": "Order Capture"}],
+        }
+    )
+
+    assert normalized["document_strategy"]["content_golden_source"] == "fdd"
+    assert normalized["sections"][0]["title"] == "Order Capture"
+
+
+def test_enhanced_plan_accepts_section_mapping_response() -> None:
+    normalized = validate_and_normalize_ai_plan(
+        {
+            "document_strategy": {
+                "template_source": "default_scm_template",
+                "content_golden_source": "fdd",
+                "default_template_required": True,
+                "notes": [],
+            },
+            "section_mapping": {
+                "Order Capture": {
+                    "source_roles": ["fdd"],
+                    "content_priority": "fdd",
+                },
+                "Pricing": "Supported by FDD pricing evidence.",
+            },
+        }
+    )
+
+    assert [section["title"] for section in normalized["sections"]] == [
+        "Order Capture",
+        "Pricing",
+    ]
+
+
+def test_enhanced_plan_rejects_schema_definition_without_sections() -> None:
+    with pytest.raises(LLMInvalidJSONError, match="missing sections list"):
+        validate_and_normalize_ai_plan(
+            {
+                "type": "object",
+                "properties": {
+                    "document_strategy": {"type": "object"},
+                    "sections": {"type": "array"},
+                },
+            }
+        )
+
+
+def test_enhanced_plan_accepts_deep_wrapped_document_sections_response() -> None:
+    normalized = validate_and_normalize_ai_plan(
+        {
+            "aud_generation_plan": {
+                "document_strategy": {
+                    "template_source": "default_scm_template",
+                    "content_golden_source": "fdd",
+                    "default_template_required": True,
+                    "notes": [],
+                },
+                "document_sections": [{"title": "Order Capture"}],
+            }
+        }
+    )
+
+    assert normalized["document_strategy"]["content_golden_source"] == "fdd"
+    assert normalized["sections"][0]["title"] == "Order Capture"
+
+
+def test_enhanced_plan_preserves_parent_strategy_when_sections_are_wrapped() -> None:
+    normalized = validate_and_normalize_ai_plan(
+        {
+            "document_strategy": {
+                "template_source": "default_scm_template",
+                "content_golden_source": "fdd",
+                "default_template_required": True,
+                "notes": [],
+            },
+            "output": {
+                "sections": [{"title": "Order Capture"}],
+            },
+        }
+    )
+
+    assert normalized["document_strategy"]["content_golden_source"] == "fdd"
+    assert normalized["sections"][0]["title"] == "Order Capture"
 
 
 def test_enhanced_plan_saved_without_overwriting_deterministic_sections(
@@ -331,6 +479,65 @@ def test_enhanced_plan_saved_without_overwriting_deterministic_sections(
     assert plan_payload["ai_enhanced_plan"]["document_strategy"][
         "content_golden_source"
     ] == "fdd"
+
+
+def test_enhancement_retries_once_after_invalid_json(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    _, session_local = client_and_session
+    fake_llm = FakeAUDPlanLLMService(failures_before_success=1)
+
+    with session_local() as session:
+        project = create_project_with_plan(session)
+        aud_plan = enhance_aud_plan_ai(
+            session,
+            project.id,
+            llm_service=fake_llm,
+            settings=Settings(_env_file=None),
+        )
+        plan_payload = json.loads(aud_plan.plan_json)
+
+    assert len(fake_llm.prompts) == 2
+    assert fake_llm.system_prompts[0] is None
+    assert "could not be parsed as JSON" in str(fake_llm.system_prompts[1])
+    assert plan_payload["ai_enhanced_plan"]["sections"][0]["title"] == "Order Capture"
+
+
+def test_enhancement_retries_once_after_missing_sections_schema(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    _, session_local = client_and_session
+    fake_llm = FakeAUDPlanLLMService(
+        responses=[
+            {"document_strategy": {"content_golden_source": "fdd"}},
+            {
+                "document_strategy": {
+                    "template_source": "default_scm_template",
+                    "content_golden_source": "fdd",
+                    "default_template_required": True,
+                    "notes": [],
+                },
+                "sections": [{"title": "Order Capture"}],
+            },
+        ]
+    )
+
+    with session_local() as session:
+        project = create_project_with_plan(session)
+        aud_plan = enhance_aud_plan_ai(
+            session,
+            project.id,
+            llm_service=fake_llm,
+            settings=Settings(_env_file=None),
+        )
+        plan_payload = json.loads(aud_plan.plan_json)
+
+    assert len(fake_llm.prompts) == 2
+    assert fake_llm.system_prompts[0] is None
+    assert "did not match the required AUD plan schema" in str(
+        fake_llm.system_prompts[1]
+    )
+    assert plan_payload["ai_enhanced_plan"]["sections"][0]["title"] == "Order Capture"
 
 
 def test_invalid_json_handled_without_corrupting_existing_plan(

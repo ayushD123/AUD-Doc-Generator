@@ -13,7 +13,11 @@ from app.models import (
     Project,
     SourceSummary,
 )
-from app.services.open_points_ai_refinement import refine_open_points_ai
+from app.services.open_points_ai_refinement import (
+    OpenPointCandidateContext,
+    build_refine_open_points_prompt,
+    refine_open_points_ai,
+)
 
 
 class FakeOpenPointsLLMService:
@@ -104,6 +108,41 @@ def test_closed_items_are_excluded_from_refined_open_points(tmp_path: Path) -> N
     finally:
         Base.metadata.drop_all(bind=engine)
         engine.dispose()
+
+
+def test_refinement_prompt_reserves_space_without_corrupting_inputs_json() -> None:
+    settings = Settings(OCI_GENAI_MAX_INPUT_CHARS=12000, _env_file=None)
+    existing_open_points = [
+        OpenPoint(
+            project_id="project-1",
+            topic=f"Topic {index}",
+            question="Need confirmation. " * 80,
+            status="Open",
+            evidence="Detailed evidence. " * 80,
+        )
+        for index in range(80)
+    ]
+    candidates = [
+        OpenPointCandidateContext(
+            candidate_id=f"candidate-{index}",
+            source="source_summary",
+            topic="Topic",
+            text="Candidate text. " * 80,
+        )
+        for index in range(160)
+    ]
+
+    prompt = build_refine_open_points_prompt(
+        existing_open_points=existing_open_points,
+        candidates=candidates,
+        fdd_context=[
+            {"id": "fdd-1", "summary_text": "FDD context. " * 120},
+        ],
+        settings=settings,
+    )
+
+    assert len(prompt) <= 12000
+    json.loads(prompt.split("Inputs:\n", 1)[1])
 
 
 def test_fdd_answered_lower_priority_conflict_is_excluded(tmp_path: Path) -> None:

@@ -206,6 +206,8 @@ POST /projects/{project_id}/jobs/enrich-document-understanding
 POST /projects/{project_id}/jobs/extract-open-points
 POST /projects/{project_id}/jobs/refine-open-points-ai
 POST /projects/{project_id}/jobs/generate-docx
+POST /projects/{project_id}/generate-aud
+GET  /projects/{project_id}/generate-aud/status
 POST /projects/{project_id}/jobs
 GET  /projects/{project_id}/jobs
 GET  /projects/{project_id}/extracted-content
@@ -379,11 +381,49 @@ curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/jobs/generate-docx
   -d "{\"use_ai_drafts\":true,\"include_draft_sections\":true,\"include_images\":true,\"include_open_points\":true}"
 ```
 
+Create a one-click AUD generation run:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/projects/{project_id}/generate-aud"
+```
+
+Expected response:
+
+```json
+{
+  "job_id": "...",
+  "status": "queued",
+  "message": "AUD generation started"
+}
+```
+
+Check one-click AUD generation status:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/projects/{project_id}/generate-aud/status"
+```
+
+Expected response:
+
+```json
+{
+  "job_id": "...",
+  "status": "queued|running|completed|failed|completed_with_warnings",
+  "current_stage": null,
+  "completed_stages": [],
+  "failed_stage": null,
+  "warnings": [],
+  "final_document_id": null,
+  "final_document_url": null,
+  "error": null
+}
+```
+
 Jobs start as:
 
 ```json
 {
-  "job_type": "classify_files | extract_transcripts | transcribe_media | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | build_evidence_index | generate_source_summaries_ai | enhance_aud_plan_ai | build_section_evidence_packs | generate_section_drafts_ai | enrich_with_document_understanding | extract_open_points | refine_open_points_ai | generate_docx",
+  "job_type": "classify_files | extract_transcripts | transcribe_media | extract_docx | extract_pptx | extract_spreadsheets | extract_all | generate_aud_plan | build_evidence_index | generate_source_summaries_ai | enhance_aud_plan_ai | build_section_evidence_packs | generate_section_drafts_ai | enrich_with_document_understanding | extract_open_points | refine_open_points_ai | generate_docx | generate_aud",
   "status": "pending",
   "progress": 0
 }
@@ -414,8 +454,44 @@ The local worker picks pending jobs from the database and processes:
 - `extract_open_points`: scans extracted content for unresolved questions and stores deduplicated open points.
 - `refine_open_points_ai`: asks the configured LLM to clean, deduplicate, and classify existing Open Points plus candidates from source summaries, AUD plans, and section drafts, then marks duplicate existing rows as `Removed` and creates refined `Open` rows with readable evidence text plus separate API metadata.
 - `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, unresolved open points, and writes it through the configured storage backend.
+- `generate_aud`: runs the one-click AUD pipeline as an orchestration job, creating internal stage jobs in order and tracking run status in `aud_generation_runs`.
 
 `extract_all` progress moves across extraction stages. If some files fail and at least one file succeeds, the job ends as `completed_with_warnings`. If all attempted files fail, the job ends as `failed`.
+
+## One-Click AUD Generation Pipeline
+
+`POST /projects/{project_id}/generate-aud` creates a queued `generate_aud` job and
+an `AUDGenerationRun` status row. The existing local worker or OCI queue worker
+then runs the full backend pipeline in order:
+
+```text
+validate_project_inputs
+extract_content
+enrich_document_understanding
+transcribe_media
+generate_initial_aud_plan
+build_evidence_index
+generate_source_summaries_ai
+enhance_aud_plan_ai
+build_section_evidence_packs
+generate_open_points_ai
+generate_section_drafts_ai
+generate_final_docx
+finalize_artifact
+```
+
+The orchestrator reuses the existing job processors instead of duplicating stage
+logic. It classifies uploads first, runs deterministic extraction, automatically
+runs Document Understanding when PDF or image uploads are present, automatically
+runs OCI Speech when media uploads are present, builds evidence and AI artifacts,
+generates the DOCX, and stores the final generated document id on completion.
+
+If a critical stage fails, the run is marked `failed`, `failed_stage` and
+`error` are stored, and any partial artifacts created before the failure remain
+available. If a stage finishes as `completed_with_warnings`, such as a
+file-level Document Understanding failure where existing extraction is still
+usable, the pipeline continues and the final run status becomes
+`completed_with_warnings`.
 
 Check job status:
 

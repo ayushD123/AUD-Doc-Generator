@@ -1171,6 +1171,114 @@ def process_generate_docx_job(
     session.commit()
 
 
+def process_generate_aud_job(
+    session: Session,
+    job: Job,
+    sleep_seconds: float = 0.2,
+) -> None:
+    from app.services.aud_pipeline_orchestrator import (
+        AUDPipelineOrchestrator,
+        get_or_create_generation_run,
+    )
+
+    job.status = "running"
+    job.progress = 1
+    job.message = "Running one-click AUD generation pipeline."
+    session.commit()
+
+    stage_processors = {
+        "classify_files": lambda db, stage_job: process_classify_files_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "extract_all": lambda db, stage_job: process_extract_all_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "enrich_with_document_understanding": (
+            lambda db, stage_job: process_enrich_document_understanding_job(
+                db,
+                stage_job,
+                sleep_seconds=sleep_seconds,
+            )
+        ),
+        "transcribe_media": lambda db, stage_job: process_transcribe_media_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "generate_aud_plan": lambda db, stage_job: process_generate_aud_plan_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "build_evidence_index": lambda db, stage_job: process_build_evidence_index_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "generate_source_summaries_ai": (
+            lambda db, stage_job: process_generate_source_summaries_ai_job(
+                db,
+                stage_job,
+                sleep_seconds=sleep_seconds,
+            )
+        ),
+        "enhance_aud_plan_ai": lambda db, stage_job: process_enhance_aud_plan_ai_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "build_section_evidence_packs": (
+            lambda db, stage_job: process_build_section_evidence_packs_job(
+                db,
+                stage_job,
+                sleep_seconds=sleep_seconds,
+            )
+        ),
+        "extract_open_points": lambda db, stage_job: process_extract_open_points_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "refine_open_points_ai": lambda db, stage_job: process_refine_open_points_ai_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+        "generate_section_drafts_ai": (
+            lambda db, stage_job: process_generate_section_drafts_ai_job(
+                db,
+                stage_job,
+                sleep_seconds=sleep_seconds,
+            )
+        ),
+        "generate_docx": lambda db, stage_job: process_generate_docx_job(
+            db,
+            stage_job,
+            sleep_seconds=sleep_seconds,
+        ),
+    }
+    generation_run = get_or_create_generation_run(
+        session,
+        project_id=job.project_id,
+        run_id=job.id,
+    )
+    orchestrator = AUDPipelineOrchestrator(
+        session=session,
+        generation_run=generation_run,
+        stage_processors=stage_processors,
+    )
+    generation_run = orchestrator.run()
+
+    job.progress = 100 if generation_run.status != "failed" else job.progress
+    job.status = generation_run.status
+    job.message = generation_run.error_message or "AUD generation completed."
+    session.commit()
+
+
 def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
     create_db_and_tables()
     processed_count = 0
@@ -1199,6 +1307,7 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                         "extract_open_points",
                         "refine_open_points_ai",
                         "generate_docx",
+                        "generate_aud",
                     ]
                 ),
             )
@@ -1289,6 +1398,12 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
                     )
                 elif job.job_type == "generate_docx":
                     process_generate_docx_job(
+                        session,
+                        job,
+                        sleep_seconds=sleep_seconds,
+                    )
+                elif job.job_type == "generate_aud":
+                    process_generate_aud_job(
                         session,
                         job,
                         sleep_seconds=sleep_seconds,
