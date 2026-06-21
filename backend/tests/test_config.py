@@ -23,6 +23,7 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     monkeypatch.delenv("SECTION_EVIDENCE_MAX_CHARS", raising=False)
     monkeypatch.delenv("REQUIRE_LLM_ENHANCED_OPEN_POINTS", raising=False)
     monkeypatch.delenv("ALLOW_RAW_OPEN_POINTS_FALLBACK", raising=False)
+    monkeypatch.delenv("DEFAULT_AUD_TEMPLATE_PATH", raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "none")
     monkeypatch.setenv("OCI_GENAI_MAX_INPUT_CHARS", "200000")
     monkeypatch.setenv("OCI_GENAI_TIMEOUT_SECONDS", "120")
@@ -58,6 +59,9 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     assert settings.SECTION_EVIDENCE_MAX_CHARS == 30000
     assert settings.REQUIRE_LLM_ENHANCED_OPEN_POINTS is True
     assert settings.ALLOW_RAW_OPEN_POINTS_FALLBACK is True
+    assert settings.DEFAULT_AUD_TEMPLATE_PATH == (
+        "/backend/template/AUD_Editable_Template.docx"
+    )
     assert settings.MAX_SPREADSHEET_ROWS_PER_SHEET == 200
 
 
@@ -91,6 +95,7 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("SECTION_EVIDENCE_MAX_CHARS", "5000")
     monkeypatch.setenv("REQUIRE_LLM_ENHANCED_OPEN_POINTS", "false")
     monkeypatch.setenv("ALLOW_RAW_OPEN_POINTS_FALLBACK", "false")
+    monkeypatch.setenv("DEFAULT_AUD_TEMPLATE_PATH", "/custom/template.docx")
     monkeypatch.setenv("MAX_SPREADSHEET_ROWS_PER_SHEET", "25")
 
     settings = Settings(_env_file=None)
@@ -124,6 +129,7 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     assert settings.SECTION_EVIDENCE_MAX_CHARS == 5000
     assert settings.REQUIRE_LLM_ENHANCED_OPEN_POINTS is False
     assert settings.ALLOW_RAW_OPEN_POINTS_FALLBACK is False
+    assert settings.DEFAULT_AUD_TEMPLATE_PATH == "/custom/template.docx"
     assert settings.MAX_SPREADSHEET_ROWS_PER_SHEET == 25
 
 

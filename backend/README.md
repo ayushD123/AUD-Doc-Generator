@@ -265,8 +265,11 @@ Allowed file extensions:
 Allowed `source_role` values:
 
 ```text
-template_aud, final_aud_sample, fdd, kt_ppt, kt_session, kt_transcript, config_workbook, supporting_doc, unknown
+aud_template, template_aud, final_aud_sample, fdd, kt_ppt, kt_session, kt_transcript, config_workbook, supporting_doc, unknown
 ```
+
+`aud_template` is the preferred explicit AUD template role. `template_aud`
+remains accepted for older uploads.
 
 ## Async Jobs
 
@@ -1021,16 +1024,44 @@ json_content = workbook metadata, visible sheets, extracted rows, and source_rol
 
 Current DOCX generation scope:
 
-- Uses the latest AUD plan and mapped extracted content only.
+- Uses `TemplateResolver` before rendering. Uploaded files with
+  `source_role=aud_template` or legacy `template_aud` are selected first; when
+  no explicit template upload exists, the configured
+  `DEFAULT_AUD_TEMPLATE_PATH` is used.
+- `DEFAULT_AUD_TEMPLATE_PATH` defaults to
+  `/backend/template/AUD_Editable_Template.docx`. The path is resolved safely for
+  local checkout paths and container paths.
+- The template cover page and styles are preserved, then stale sample body
+  placeholders are removed before rendering a fresh TOC and generated AUD
+  content.
+- `TemplatePopulationService` builds a clean intermediate document model from
+  the selected template path, project metadata, final AI-enhanced AUD plan,
+  section drafts, selected tables/images, and LLM-enhanced Open Points before
+  DOCX writing.
+- Generation fails before DOCX rendering with a clear error if neither an
+  uploaded template nor the default template file exists.
+- Logs either `Using uploaded AUD template: <file>` or
+  `Using default AUD template: /backend/template/AUD_Editable_Template.docx`
+  when selecting the template.
+- Uses the final AI-enhanced AUD plan when present, otherwise the latest
+  deterministic AUD plan and mapped extracted content.
 - When `use_ai_drafts=true`, accepted/reviewed/approved section drafts are preferred over rule-based content.
 - Section drafts with `review_status=draft` are used only when `include_draft_sections=true`.
 - Section drafts with `review_status=omitted`, `excluded`, or `removed` exclude that section.
 - If an AI draft is unavailable or gated off, DOCX generation falls back to rule-based source content.
 - Selected draft tables from `draft_json.included_tables` are inserted when resolvable from direct rows or evidence item IDs.
+- Structured tables are rendered through `DOCXTableRenderer`, which normalizes
+  markdown tables, pipe-delimited tables, selected draft/evidence tables,
+  extracted DOCX/PPTX table rows, spreadsheet-style rows, and Open Points into
+  real Word tables with visible borders, bold/repeating headers where possible,
+  aligned cells, and practical column widths. Multi-line cells and intentionally
+  blank leading cells are preserved for process assignment/orchestration tables.
+  Ambiguous or malformed table text falls back to paragraph rendering only with
+  a logged reason.
 - Selected draft images from `draft_json.included_images` are inserted when `include_images=true`; otherwise image insertion is skipped.
 - Open Points are included only when `include_open_points=true`. By default, only rows with `source_type=llm_enhanced` and status `Open` are rendered.
 - If the latest AUD plan is missing, contains only standard sections, or predates extracted FDD content, DOCX generation refreshes the deterministic AUD plan before rendering.
-- Enterprise Structure is a required carry-forward section. If detected in FDD, PPT, or other extracted source content, it is inserted after Introduction with source text, tables, and supported associated images. If not detected, a clear placeholder is inserted after Introduction.
+- Enterprise Structure is a carry-forward section when detected in FDD, PPT, or other extracted source content, and is inserted with source text, tables, and supported associated images. If not detected, it is omitted instead of inventing BU/LE content.
 - Does not call an LLM.
 - Gives mapped FDD content priority over PPT content.
 - For projects with both FDD and PPT, AUD planning keeps FDD headings first and adds non-duplicate PPT sections as supporting material; FDD remains the golden source when titles overlap.
@@ -1042,13 +1073,16 @@ Current DOCX generation scope:
 - Resizes inserted PPT images to the usable DOCX page width and adds captions such as `Source image from slide X: <slide title>`.
 - Includes up to 3 PPT images per section for now.
 - Skips PPT images in formats `python-docx` cannot embed directly, such as WMF vector images.
-- If section content is too long, includes the first meaningful paragraphs and adds `Additional details available in source document.`
-- If no supported mapped content is available, writes `<Content not available in provided source material>`.
-- Open Points includes rows with status `Open` only, and defaults to `llm_enhanced` rows so raw extracted candidates are not inserted directly.
-- If LLM Open Points refinement fails completely and `ALLOW_RAW_OPEN_POINTS_FALLBACK=true`, DOCX generation may fall back to raw extracted rows with `refinement_status=failed` when no enhanced rows exist. This logs `LLM Open Points enhancement failed; falling back to raw Open Points` and stores `{"open_points_fallback": true}` in generated document metadata.
+- Section source content is carried through as refined readable paragraphs
+  instead of being replaced with generic source-detail or summary notes.
+- If no supported mapped content is available, the unsupported section is omitted
+  instead of rendering raw template placeholder text.
+- Open Points includes only rows with `source_type=llm_enhanced` and status `Open`.
+  Raw extracted Open Points remain refinement candidates and are not inserted
+  directly into the final AUD.
 - Documents Referred is excluded.
 - Source Conflict Summary is appended only when `INTERNAL_DEBUG_OUTPUT=true`.
-- Unsupported source mappings are left as placeholders rather than inferred.
+- Unsupported source mappings are omitted rather than inferred.
 - PPT image placement uses only local extracted image paths; no OCR or image understanding is performed.
 
 ## Manual DOCX Extraction Test
@@ -1168,7 +1202,7 @@ Expected results:
 ## Manual Source Priority Report Test
 
 Upload project files with source roles such as `fdd`, `kt_ppt`, `kt_transcript`,
-`config_workbook`, and optionally `template_aud`, then run:
+`config_workbook`, and optionally `aud_template` or legacy `template_aud`, then run:
 
 ```powershell
 curl.exe "http://127.0.0.1:8000/projects/{project_id}/source-priority-report"
@@ -1176,7 +1210,7 @@ curl.exe "http://127.0.0.1:8000/projects/{project_id}/source-priority-report"
 
 Expected results:
 
-- `has_explicit_template` is `true` only when a `template_aud` file is uploaded.
+- `has_explicit_template` is `true` when an `aud_template` or legacy `template_aud` file is uploaded.
 - `recommended_default_template_needed` is `true` when no explicit template AUD is uploaded.
 - FDD uploads appear in `golden_source_files`.
 - `priority_order` lists the template decision first, then FDD when present, then supporting source roles.
@@ -1278,7 +1312,18 @@ Expected results:
 - The `generate_docx` job reaches `completed` with `100` progress.
 - A generated document row is returned with `document_type` set to `aud_docx`.
 - With local storage, the `.docx` file exists under `backend/storage/projects/{project_id}/outputs/`. With OCI storage, the same key exists in the configured bucket.
-- The document contains a title page, version history table, Purpose and Scope placeholder, planned section headings, supported rule-based section content or clear placeholders, unresolved open points table, and internal review note.
+- The document contains the template title page, generated TOC, version history
+  table, Purpose and Scope, planned section headings, supported rule-based or
+  reviewed draft content, unresolved LLM-enhanced open points table, and internal
+  review note.
+- When no explicit AUD template is uploaded, the title page starts from
+  `backend/template/AUD_Editable_Template.docx`; cover metadata placeholders for
+  customer, module, author, version, and date are filled from project metadata.
+- Unused template placeholders and repeated sample process sections are removed
+  from the final AUD.
+- Unsupported sections such as Documents Referred, Roles and Functions, Legend,
+  Glossary, and Reporting/RICEW are omitted unless the final plan/source content
+  provides supported evidence for them.
 - Matching PPT images appear below relevant planned sections with source slide captions when extracted image files exist locally.
 - If an earlier AUD plan was generated before extraction or before FDD content was available, the DOCX job refreshes the plan so extracted FDD/PPT sections can appear and FDD can win.
 - No LLM call, OCR, image interpretation, or template-perfect formatting is used during DOCX generation.

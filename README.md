@@ -48,10 +48,31 @@ Gemini Flash models across many AUD sections.
 Section evidence packs use `SECTION_EVIDENCE_MAX_CHARS=30000` by default to keep
 future section-drafting prompts bounded and traceable.
 
-DOCX generation can now use reviewed AI section drafts before falling back to
-rule-based source content. The `generate-docx` job accepts options for AI draft
-usage, draft-status sections, images, and Open Points while keeping FDD as the
-golden source and requiring internal review before customer sharing.
+DOCX generation now starts from an AUD template before adding generated draft
+content. An uploaded file with `source_role=aud_template` or the legacy
+`template_aud` role is used first; otherwise the backend validates and uses
+`DEFAULT_AUD_TEMPLATE_PATH`, which defaults to
+`/backend/template/AUD_Editable_Template.docx`. The generator preserves the
+template cover page and styles, removes stale sample body placeholders, and uses
+`TemplatePopulationService` to build a clean intermediate document model from
+the final AI-enhanced AUD plan, section drafts, selected tables/images, and
+LLM-enhanced Open Points. Reviewed AI section drafts are preferred when
+available; otherwise deterministic source-backed content is rendered. The
+`generate-docx` job accepts options for AI draft usage, draft-status sections,
+images, and Open Points while keeping FDD as the golden source and requiring
+internal review before customer sharing.
+
+DOCX tables are rendered through `DOCXTableRenderer`. Markdown tables,
+pipe-delimited tables, selected draft/evidence tables, extracted DOCX/PPTX
+tables, spreadsheet-style row data, and Open Points are normalized into real
+Word tables with visible grid borders, bold/repeating headers where supported,
+aligned cells, and practical column widths. Multi-line table cells and rows
+with intentionally blank leading cells are preserved so process assignment and
+orchestration tables do not collapse into paragraph dumps. Malformed or
+ambiguous table text is left as paragraph content only when it cannot be
+confidently parsed, and the fallback reason is logged. Source content is carried
+through as refined readable paragraphs rather than replaced with generic
+source-detail or summary notes.
 
 ## AI Open Points Refinement
 
@@ -64,9 +85,6 @@ source, marks duplicate existing Open Points as `Removed`, creates refined
 `Open` items, returns readable evidence text for review, and exposes refinement
 metadata separately in the Open Points API response.
 
-Final DOCX generation uses only `llm_enhanced` Open Points with status `Open`
-by default. Raw extracted Open Points are treated as candidates and are not
-inserted into the AUD unless the LLM refinement stage fails completely and
-`ALLOW_RAW_OPEN_POINTS_FALLBACK=true`. Fallback use is logged with
-`LLM Open Points enhancement failed; falling back to raw Open Points` and stored
-on generated document metadata as `open_points_fallback=true`.
+Final DOCX generation uses only `llm_enhanced` Open Points with status `Open`.
+Raw extracted Open Points are treated as refinement candidates and are not
+inserted into the final AUD.

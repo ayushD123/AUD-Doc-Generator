@@ -4,7 +4,6 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -12,7 +11,9 @@ from typing import Any
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.image.exceptions import UnrecognizedImageError
-from docx.shared import Emu
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Emu, Pt, RGBColor
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,10 +33,25 @@ from app.services.file_storage import (
     StorageService,
     get_file_storage,
 )
+from app.services.docx_table_renderer import (
+    DOCXTableRenderer,
+    NormalizedTable,
+    TableNormalizer,
+)
+from app.services.template_resolver import TemplateResolver
+from app.services.template_population import (
+    PopulatedDocumentModel,
+    PopulatedImage,
+    PopulatedOpenPoint,
+    PopulatedSection,
+    PopulatedTable,
+    SectionPopulationInput,
+    TemplatePopulationService,
+    clean_template_text,
+)
 
 DOCUMENT_TYPE = "aud_docx"
 PLACEHOLDER_LINE = "<Content not available in provided source material>"
-TRUNCATION_NOTE = "Additional details available in source document."
 GENERATION_NOTE = (
     "Generated draft for Oracle internal review. Senior consultant review required "
     "before customer sharing."
@@ -53,6 +69,16 @@ MAX_SECTION_CHARACTERS = 1800
 MAX_ENTERPRISE_SECTION_PARAGRAPHS = 20
 MAX_ENTERPRISE_SECTION_CHARACTERS = 8000
 MAX_IMAGES_PER_SECTION = 3
+SECTION_HEADING_FONT_NAME = "Oracle Sans"
+SECTION_HEADING_FONT_SIZE_PT = 16
+SECTION_HEADING_COLOR = RGBColor(31, 78, 121)
+SECTION_HEADING_SPACE_BEFORE_PT = 18
+SECTION_HEADING_SPACE_AFTER_PT = 8
+CONTENT_SUBHEADING_FONT_SIZE_PT = 14
+CONTENT_SUBHEADING_COLOR = RGBColor(31, 78, 121)
+STEP_HEADING_FONT_SIZE_PT = 13
+STEP_HEADING_COLOR = RGBColor(68, 114, 196)
+BODY_SPACE_AFTER_PT = 6
 ENTERPRISE_STRUCTURE_TITLE = "Enterprise Structure"
 SUPPORTED_DOCX_IMAGE_EXTENSIONS = {
     ".bmp",
@@ -73,12 +99,17 @@ LOW_VALUE_SLIDE_TITLES = {
 }
 ACCEPTED_DRAFT_STATUSES = {"accepted", "approved", "reviewed"}
 OMITTED_DRAFT_STATUSES = {"excluded", "omitted", "removed"}
-OPEN_POINTS_FALLBACK_WARNING = (
-    "LLM Open Points enhancement failed; falling back to raw Open Points"
-)
-
+TEMPLATE_PLACEHOLDER_PATTERN = re.compile(r"<+[^<>]+>+")
+TEMPLATE_BODY_START_TITLES = {
+    "document version history",
+    "table of contents",
+    "table of content",
+    "introduction",
+    "purpose and scope",
+}
 logger = logging.getLogger(__name__)
-
+TABLE_NORMALIZER = TableNormalizer()
+TABLE_RENDERER = DOCXTableRenderer(TABLE_NORMALIZER)
 
 @dataclass(frozen=True)
 class DocxGenerationOptions:
@@ -93,6 +124,7 @@ class SectionRenderContext:
     draft: AUDSectionDraft | None
     draft_json: dict[str, Any]
     paragraphs: list[str]
+    tables: list[PopulatedTable]
     was_truncated: bool
 
 
@@ -191,6 +223,25 @@ def parse_json_object(value: str | None) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def clean_generated_text(value: str | None) -> str:
+    return clean_template_text(value)
+
+
+def dedupe_consecutive_text(items: list[str]) -> list[str]:
+    deduped: list[str] = []
+    previous_normalized = ""
+
+    for item in items:
+        normalized = normalize_title(item)
+        if normalized and normalized == previous_normalized:
+            continue
+
+        deduped.append(item)
+        previous_normalized = normalized
+
+    return deduped
+
+
 def parse_docx_generation_options(value: str | None = None) -> DocxGenerationOptions:
     payload = parse_json_object(value)
     options = payload.get("options") if payload else {}
@@ -253,25 +304,6 @@ def list_open_points_for_docx(
 
     if enhanced_open_points:
         return OpenPointSelection(enhanced_open_points, used_fallback=False)
-
-    raw_open_points = [
-        open_point
-        for open_point in open_points
-        if open_point.source_type in {"raw_extracted", "fallback"}
-    ]
-
-    if not settings.REQUIRE_LLM_ENHANCED_OPEN_POINTS:
-        return OpenPointSelection(raw_open_points, used_fallback=False)
-
-    fallback_open_points = [
-        open_point
-        for open_point in raw_open_points
-        if open_point.refinement_status == "failed"
-    ]
-
-    if settings.ALLOW_RAW_OPEN_POINTS_FALLBACK and fallback_open_points:
-        logger.warning(OPEN_POINTS_FALLBACK_WARNING)
-        return OpenPointSelection(fallback_open_points, used_fallback=True)
 
     return OpenPointSelection([], used_fallback=False)
 
@@ -537,26 +569,31 @@ def meaningful_paragraphs(value: str | None) -> list[str]:
     return paragraphs
 
 
+def table_aware_paragraphs(value: str | None) -> list[str]:
+    if not value:
+        return []
+
+    paragraphs: list[str] = []
+    for paragraph in re.split(r"\n\s*\n", value):
+        lines = [line.strip() for line in paragraph.splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        preserved_paragraph = "\n".join(lines)
+        if looks_like_table_text(preserved_paragraph):
+            paragraphs.append(preserved_paragraph)
+        else:
+            paragraphs.append(" ".join(preserved_paragraph.split()))
+
+    return paragraphs
+
+
 def truncate_paragraphs(
     paragraphs: list[str],
     max_paragraphs: int = MAX_SECTION_PARAGRAPHS,
     max_characters: int = MAX_SECTION_CHARACTERS,
 ) -> tuple[list[str], bool]:
-    selected: list[str] = []
-    character_count = 0
-
-    for paragraph in paragraphs:
-        next_count = character_count + len(paragraph)
-        if selected and (len(selected) >= max_paragraphs or next_count > max_characters):
-            return selected, True
-
-        if not selected and len(paragraph) > max_characters:
-            return [f"{paragraph[:max_characters].rstrip()}..."], True
-
-        selected.append(paragraph)
-        character_count = next_count
-
-    return selected, False
+    return paragraphs, False
 
 
 def is_heading_block(block: str) -> bool:
@@ -574,7 +611,7 @@ def extract_fdd_heading_content(
     max_paragraphs: int = MAX_SECTION_PARAGRAPHS,
     max_characters: int = MAX_SECTION_CHARACTERS,
 ) -> tuple[list[str], bool]:
-    blocks = meaningful_paragraphs(extracted_content.text_content)
+    blocks = table_aware_paragraphs(extracted_content.text_content)
     collecting = False
     paragraphs: list[str] = []
 
@@ -598,7 +635,7 @@ def extract_fdd_heading_content(
 def extract_enterprise_structure_content(
     extracted_content: ExtractedContent,
 ) -> tuple[list[str], bool]:
-    blocks = meaningful_paragraphs(extracted_content.text_content)
+    blocks = table_aware_paragraphs(extracted_content.text_content)
     collecting = False
     paragraphs: list[str] = []
 
@@ -633,20 +670,6 @@ def render_slide_paragraphs(slide: dict[str, Any]) -> list[str]:
         paragraphs.extend(
             text for text in texts if isinstance(text, str) and text.strip()
         )
-
-    tables = slide.get("tables")
-    if isinstance(tables, list):
-        for table in tables:
-            if not isinstance(table, dict):
-                continue
-
-            rows = table.get("rows")
-            if isinstance(rows, list):
-                for row in rows:
-                    if isinstance(row, list):
-                        row_text = " | ".join(str(cell or "") for cell in row).strip()
-                        if row_text:
-                            paragraphs.append(row_text)
 
     notes = slide.get("notes")
     if isinstance(notes, str) and notes.strip():
@@ -985,7 +1008,7 @@ def add_section_images(
                 if isinstance(slide_number, int)
                 else f"Source image from slide: {slide_title}"
             )
-        caption_paragraph = document.add_paragraph(caption)
+        caption_paragraph = document.add_paragraph(clean_generated_text(caption))
         caption_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
 
@@ -1090,19 +1113,19 @@ def add_section_tables(
             continue
 
         if title:
-            document.add_paragraph(title)
+            document.add_paragraph(clean_generated_text(title))
 
         column_count = max(len(row) for row in rows)
         table = document.add_table(rows=1, cols=column_count)
         table.style = "Table Grid"
 
         for index, value in enumerate(rows[0]):
-            table.rows[0].cells[index].text = value
+            table.rows[0].cells[index].text = clean_generated_text(value)
 
         for source_row in rows[1:]:
             row = table.add_row().cells
             for index, value in enumerate(source_row[:column_count]):
-                row[index].text = value
+                row[index].text = clean_generated_text(value)
 
 
 def image_from_evidence(
@@ -1175,14 +1198,212 @@ def normalize_included_images(
     return images
 
 
+def style_hint_for_section(section_title: str | None) -> str:
+    normalized = normalize_title(section_title or "")
+
+    if "open point" in normalized:
+        return "open_points"
+    if "activity" in normalized:
+        return "activity"
+    if "ricew" in normalized:
+        return "ricew"
+    if "report" in normalized:
+        return "reports"
+    if "feature" in normalized and "enable" in normalized:
+        return "feature_enablement"
+
+    return "standard"
+
+
+def to_populated_table(normalized_table: NormalizedTable) -> PopulatedTable:
+    return PopulatedTable(
+        title=clean_generated_text(normalized_table.title),
+        columns=[clean_generated_text(column) for column in normalized_table.columns],
+        rows=[
+            [clean_generated_text(cell) for cell in row]
+            for row in normalized_table.rows
+        ],
+        source=normalized_table.source,
+        section_id=normalized_table.section_id,
+        style_hint=normalized_table.style_hint,
+    )
+
+
+def looks_like_table_text(value: str) -> bool:
+    stripped = value.strip()
+    if "|" not in stripped:
+        return False
+
+    if re.match(r"^\[?Table\s+\d+[:\]]?", stripped, flags=re.IGNORECASE):
+        return True
+
+    return len([line for line in stripped.splitlines() if "|" in line]) >= 2
+
+
+def extract_structured_tables_from_paragraphs(
+    paragraphs: list[str],
+    *,
+    section_title: str | None,
+    section_id: str | None,
+    source: str | None,
+    drop_unparsed_table_text: bool = False,
+) -> tuple[list[str], list[PopulatedTable]]:
+    remaining_paragraphs: list[str] = []
+    tables: list[PopulatedTable] = []
+    style_hint = style_hint_for_section(section_title)
+
+    for paragraph in paragraphs:
+        if not looks_like_table_text(paragraph):
+            remaining_paragraphs.append(paragraph)
+            continue
+
+        if drop_unparsed_table_text:
+            continue
+
+        result = TABLE_NORMALIZER.normalize_with_reason(
+            paragraph,
+            title=None,
+            source=source,
+            section_id=section_id,
+            style_hint=style_hint,
+        )
+        if result.table is None:
+            logger.warning(
+                "DOCX table fallback for section %s: %s",
+                section_title or "unknown",
+                result.fallback_reason,
+            )
+            remaining_paragraphs.append(paragraph)
+            continue
+
+        tables.append(to_populated_table(result.table))
+
+    return remaining_paragraphs, tables
+
+
+def collect_docx_section_tables(
+    extracted_content: ExtractedContent,
+    section_title: str,
+    section_id: str | None,
+) -> list[PopulatedTable]:
+    json_content = parse_extracted_json(extracted_content)
+    tables = json_content.get("tables")
+    if not isinstance(tables, list):
+        return []
+
+    populated_tables: list[PopulatedTable] = []
+    for table in tables:
+        if not isinstance(table, dict):
+            continue
+
+        table_section_title = table.get("section_title")
+        if isinstance(table_section_title, str) and not titles_resemble(
+            section_title,
+            table_section_title,
+        ):
+            continue
+
+        table_index = table.get("index")
+        table_title = (
+            f"Table {table_index}: {section_title}"
+            if table_index
+            else section_title
+        )
+        populated_table = normalize_source_table(
+            table,
+            title=table_title,
+            source=extracted_content.title,
+            section_id=section_id,
+            style_hint=style_hint_for_section(section_title),
+        )
+        if populated_table is not None:
+            populated_tables.append(populated_table)
+
+    return populated_tables
+
+
+def normalize_source_table(
+    table_data: Any,
+    *,
+    title: str | None,
+    source: str | None,
+    section_id: str | None,
+    style_hint: str,
+) -> PopulatedTable | None:
+    result = TABLE_NORMALIZER.normalize_with_reason(
+        table_data,
+        title=title,
+        source=source,
+        section_id=section_id,
+        style_hint=style_hint,
+    )
+    if result.table is None:
+        logger.warning(
+            "DOCX table fallback for %s: %s",
+            title or source or "source table",
+            result.fallback_reason,
+        )
+        return None
+
+    return to_populated_table(result.table)
+
+
+def extract_ppt_slide_tables(
+    extracted_content: ExtractedContent,
+    slide_title: str,
+    section_id: str | None,
+) -> list[PopulatedTable]:
+    json_content = parse_extracted_json(extracted_content)
+    slides = json_content.get("slides")
+
+    if not isinstance(slides, list):
+        return []
+
+    populated_tables: list[PopulatedTable] = []
+    for slide in slides:
+        if not isinstance(slide, dict):
+            continue
+
+        title = slide.get("title")
+        if not isinstance(title, str) or normalize_title(title) != normalize_title(slide_title):
+            continue
+
+        tables = slide.get("tables")
+        if not isinstance(tables, list):
+            continue
+
+        for table in tables:
+            if not isinstance(table, dict):
+                continue
+
+            table_index = table.get("index")
+            table_title = (
+                f"Slide {slide.get('slide_number')} Table {table_index}"
+                if table_index
+                else f"Slide {slide.get('slide_number')} Table"
+            )
+            populated_table = normalize_source_table(
+                table,
+                title=table_title,
+                source=extracted_content.title,
+                section_id=section_id,
+                style_hint=style_hint_for_section(slide_title),
+            )
+            if populated_table is not None:
+                populated_tables.append(populated_table)
+
+    return populated_tables
+
+
 def build_section_content(
     section: dict[str, Any],
     extracted_content_by_id: dict[str, ExtractedContent],
-) -> tuple[list[str], bool]:
+) -> tuple[list[str], list[PopulatedTable], bool]:
     section_title = get_section_title(section)
+    section_id = get_section_id(section)
 
     if not section_title:
-        return [], False
+        return [], [], False
 
     mapped_contents = get_mapped_extracted_contents(section, extracted_content_by_id)
     fdd_contents = [
@@ -1201,7 +1422,36 @@ def build_section_content(
                     extracted_content
                 )
                 if paragraphs:
-                    return paragraphs, was_truncated
+                    docx_tables = collect_docx_section_tables(
+                        extracted_content,
+                        section_title,
+                        section_id,
+                    )
+                    paragraphs, parsed_tables = extract_structured_tables_from_paragraphs(
+                        paragraphs,
+                        section_title=section_title,
+                        section_id=section_id,
+                        source=extracted_content.title,
+                        drop_unparsed_table_text=bool(docx_tables),
+                    )
+                    return paragraphs, [*docx_tables, *parsed_tables], was_truncated
+            if get_extracted_source_role(extracted_content) == "kt_ppt":
+                paragraphs, was_truncated = extract_ppt_slide_content(
+                    extracted_content,
+                    ENTERPRISE_STRUCTURE_TITLE,
+                    MAX_ENTERPRISE_SECTION_PARAGRAPHS,
+                    MAX_ENTERPRISE_SECTION_CHARACTERS,
+                )
+                if paragraphs:
+                    return (
+                        paragraphs,
+                        extract_ppt_slide_tables(
+                            extracted_content,
+                            ENTERPRISE_STRUCTURE_TITLE,
+                            section_id,
+                        ),
+                        was_truncated,
+                    )
 
     for extracted_content in fdd_contents:
         paragraphs, was_truncated = extract_fdd_heading_content(
@@ -1215,10 +1465,22 @@ def build_section_content(
             else MAX_SECTION_CHARACTERS,
         )
         if paragraphs:
-            return paragraphs, was_truncated
+            docx_tables = (
+                collect_docx_section_tables(extracted_content, section_title, section_id)
+                if extracted_content.content_type == "docx"
+                else []
+            )
+            paragraphs, parsed_tables = extract_structured_tables_from_paragraphs(
+                paragraphs,
+                section_title=section_title,
+                section_id=section_id,
+                source=extracted_content.title,
+                drop_unparsed_table_text=bool(docx_tables),
+            )
+            return paragraphs, [*docx_tables, *parsed_tables], was_truncated
 
     if source_role_basis == "fdd":
-        return [], False
+        return [], [], False
 
     if source_role_basis == "kt_ppt":
         for extracted_content in mapped_contents:
@@ -1236,9 +1498,17 @@ def build_section_content(
                 else MAX_SECTION_CHARACTERS,
             )
             if paragraphs:
-                return paragraphs, was_truncated
+                return (
+                    paragraphs,
+                    extract_ppt_slide_tables(
+                        extracted_content,
+                        section_title,
+                        section_id,
+                    ),
+                    was_truncated,
+                )
 
-    return [], False
+    return [], [], False
 
 
 def build_section_render_context(
@@ -1254,26 +1524,49 @@ def build_section_render_context(
 
     draft_json = parse_draft_json(draft)
     if is_draft_allowed(draft, options):
-        paragraphs = meaningful_paragraphs(draft.draft_text)
+        paragraphs = table_aware_paragraphs(draft.draft_text)
         if paragraphs and paragraphs != [PLACEHOLDER_LINE]:
+            paragraphs, tables = extract_structured_tables_from_paragraphs(
+                paragraphs,
+                section_title=get_section_title(section),
+                section_id=get_section_id(section),
+                source=draft.title,
+            )
             return SectionRenderContext(
                 draft=draft,
                 draft_json=draft_json,
                 paragraphs=paragraphs,
+                tables=tables,
                 was_truncated=False,
             )
 
-    paragraphs, was_truncated = build_section_content(section, extracted_content_by_id)
+    paragraphs, tables, was_truncated = build_section_content(
+        section,
+        extracted_content_by_id,
+    )
     return SectionRenderContext(
         draft=draft,
         draft_json=draft_json,
         paragraphs=paragraphs,
+        tables=tables,
         was_truncated=was_truncated,
     )
 
 
-def iter_planned_sections(plan_payload: dict[str, Any]) -> list[dict[str, Any]]:
+def get_final_plan_sections(plan_payload: dict[str, Any]) -> list[Any]:
+    ai_enhanced_plan = plan_payload.get("ai_enhanced_plan")
+    if isinstance(ai_enhanced_plan, dict) and isinstance(
+        ai_enhanced_plan.get("sections"),
+        list,
+    ):
+        return ai_enhanced_plan["sections"]
+
     sections = plan_payload.get("sections")
+    return sections if isinstance(sections, list) else []
+
+
+def iter_planned_sections(plan_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    sections = get_final_plan_sections(plan_payload)
 
     if not isinstance(sections, list):
         return []
@@ -1337,55 +1630,496 @@ def iter_planned_sections(plan_payload: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
-def add_key_value_paragraph(document: Document, label: str, value: str | None) -> None:
-    paragraph = document.add_paragraph()
-    paragraph.add_run(f"{label}: ").bold = True
-    paragraph.add_run(value or "")
+def format_table_of_contents(titles: list[str]) -> str:
+    return "\n".join(
+        f"{index}. {title}" for index, title in enumerate(titles, start=1)
+    )
+
+
+def build_template_replacements(
+    document_model: PopulatedDocumentModel,
+) -> dict[str, str]:
+    module_name = document_model.module_name
+    customer_name = document_model.customer_name
+    author_name = document_model.author_name
+    table_of_contents = format_table_of_contents(document_model.toc_titles)
+    open_points_text = "\n".join(
+        f"{index}. {open_point.question}"
+        for index, open_point in enumerate(document_model.open_points, start=1)
+    )
+
+    return {
+        "<Customer Name>": customer_name,
+        "<Module Name>": module_name,
+        "<Date>": document_model.generated_date.isoformat(),
+        "<Author>": author_name,
+        "<Ver.>": document_model.version_history.version,
+        "<Table Of Content>": table_of_contents,
+        "<Table of Content>": table_of_contents,
+        "<Table of Contents>": table_of_contents,
+        "<From User Input>": module_name,
+        "<Generate from Customer name>": customer_name,
+        "<Process Name>": module_name,
+        "<Subprocess Name>": "",
+        "<Attributes>": "",
+        "<Open Points>": open_points_text,
+        "<Unsresolved or missing information to be listed here>": open_points_text,
+    }
+
+
+def apply_replacements_to_text(text: str, replacements: dict[str, str]) -> str:
+    replaced_text = text
+    for placeholder, value in replacements.items():
+        replaced_text = replaced_text.replace(placeholder, value)
+
+    return TEMPLATE_PLACEHOLDER_PATTERN.sub("", replaced_text)
+
+
+def replace_paragraph_placeholders(
+    paragraph,
+    replacements: dict[str, str],
+) -> None:
+    original_text = paragraph.text
+    replaced_text = apply_replacements_to_text(original_text, replacements)
+
+    if replaced_text == original_text:
+        return
+
+    if not paragraph.runs:
+        paragraph.add_run(replaced_text)
+        return
+
+    paragraph.runs[0].text = replaced_text
+    for run in paragraph.runs[1:]:
+        run.text = ""
+
+
+def replace_template_placeholders(
+    document: Document,
+    document_model: PopulatedDocumentModel,
+) -> None:
+    replacements = build_template_replacements(document_model)
+
+    for paragraph in document.paragraphs:
+        replace_paragraph_placeholders(paragraph, replacements)
+
+    for table in document.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    replace_paragraph_placeholders(paragraph, replacements)
+
+
+def apply_generated_heading_format(paragraph) -> None:
+    paragraph_format = paragraph.paragraph_format
+    paragraph_format.space_before = Pt(SECTION_HEADING_SPACE_BEFORE_PT)
+    paragraph_format.space_after = Pt(SECTION_HEADING_SPACE_AFTER_PT)
+    paragraph_format.keep_with_next = True
+
+    for run in paragraph.runs:
+        run.font.name = SECTION_HEADING_FONT_NAME
+        run.font.size = Pt(SECTION_HEADING_FONT_SIZE_PT)
+        run.font.bold = True
+        run.font.color.rgb = SECTION_HEADING_COLOR
+        run._element.rPr.rFonts.set(qn("w:eastAsia"), SECTION_HEADING_FONT_NAME)
+
+
+def add_generated_heading(
+    document: Document,
+    title: str,
+    level: int = 1,
+):
+    heading = document.add_heading(title, level=level)
+    apply_generated_heading_format(heading)
+    return heading
+
+
+def truncate_template_after_cover(document: Document) -> None:
+    body = document._body._element
+    body_children = list(body)
+    start_element = None
+
+    for paragraph in document.paragraphs:
+        if normalize_title(paragraph.text) in TEMPLATE_BODY_START_TITLES:
+            start_element = paragraph._element
+            break
+
+    if start_element is None:
+        return
+
+    try:
+        start_index = body_children.index(start_element)
+    except ValueError:
+        return
+
+    for child in body_children[start_index:]:
+        if child.tag.endswith("}sectPr"):
+            continue
+
+        body.remove(child)
+
+
+def add_table_of_contents(
+    document: Document,
+    document_model: PopulatedDocumentModel,
+) -> None:
+    add_generated_heading(document, "Table of Contents")
+    TABLE_RENDERER.add_table(
+        document,
+        NormalizedTable(
+            title=None,
+            columns=["Section", "Title"],
+            rows=[
+                [str(index), title]
+                for index, title in enumerate(document_model.toc_titles, start=1)
+            ],
+            style_hint="standard",
+        ),
+    )
 
 
 def add_document_version_history(
     document: Document,
-    author_name: str | None,
-    current_date: date,
+    document_model: PopulatedDocumentModel,
 ) -> None:
-    document.add_heading("Document Version History", level=1)
-    table = document.add_table(rows=1, cols=4)
-    table.style = "Table Grid"
-    headers = ["Version", "Date", "Author", "Reviewed By"]
+    add_generated_heading(document, "Document Version History")
+    TABLE_RENDERER.add_table(
+        document,
+        NormalizedTable(
+            title=None,
+            columns=["Version", "Date", "Author", "Reviewed By"],
+            rows=[
+                [
+                    document_model.version_history.version,
+                    document_model.version_history.date.isoformat(),
+                    document_model.version_history.author,
+                    document_model.version_history.reviewed_by,
+                ]
+            ],
+            style_hint="standard",
+        ),
+    )
 
-    for cell, header in zip(table.rows[0].cells, headers, strict=True):
-        cell.text = header
 
-    row = table.add_row().cells
-    row[0].text = "1.0"
-    row[1].text = current_date.isoformat()
-    row[2].text = author_name or ""
-    row[3].text = ""
-
-
-def add_open_points_table(document: Document, open_points: list[OpenPoint]) -> None:
-    document.add_heading("Open Points", level=1)
-    table = document.add_table(rows=1, cols=4)
-    table.style = "Table Grid"
-    headers = ["ID", "Topic", "Question", "Status"]
-
-    for cell, header in zip(table.rows[0].cells, headers, strict=True):
-        cell.text = header
-
+def add_open_points_table(
+    document: Document,
+    open_points: list[PopulatedOpenPoint],
+) -> None:
     if not open_points:
-        row = table.add_row().cells
-        row[0].text = ""
-        row[1].text = ""
-        row[2].text = "No open points extracted yet."
-        row[3].text = ""
         return
 
-    for index, open_point in enumerate(open_points, start=1):
-        row = table.add_row().cells
-        row[0].text = str(index)
-        row[1].text = open_point.topic
-        row[2].text = open_point.question
-        row[3].text = open_point.status
+    add_generated_heading(document, "Open Points")
+    TABLE_RENDERER.add_table(
+        document,
+        NormalizedTable(
+            title=None,
+            columns=["ID", "Topic", "Question", "Status"],
+            rows=[
+                [str(index), open_point.topic, open_point.question, open_point.status]
+                for index, open_point in enumerate(open_points, start=1)
+            ],
+            style_hint="open_points",
+        ),
+    )
+
+
+def to_populated_images(images: list[dict[str, Any]]) -> list[PopulatedImage]:
+    populated_images: list[PopulatedImage] = []
+
+    for image in images:
+        storage_path = image.get("storage_path")
+        if not isinstance(storage_path, str):
+            continue
+
+        slide_number = image.get("slide_number")
+        slide_title = image.get("slide_title")
+        caption = image.get("caption")
+        populated_images.append(
+            PopulatedImage(
+                storage_path=storage_path,
+                slide_number=slide_number if isinstance(slide_number, int) else None,
+                slide_title=clean_generated_text(slide_title)
+                if isinstance(slide_title, str)
+                else None,
+                caption=clean_generated_text(caption)
+                if isinstance(caption, str)
+                else None,
+            )
+        )
+
+    return populated_images
+
+
+def to_image_dicts(images: list[PopulatedImage]) -> list[dict[str, Any]]:
+    return [
+        {
+            "storage_path": image.storage_path,
+            "slide_number": image.slide_number,
+            "slide_title": image.slide_title,
+            "caption": image.caption,
+        }
+        for image in images
+    ]
+
+
+def to_populated_tables(
+    table_items: list[Any],
+    evidence_item_by_id: dict[str, EvidenceItem],
+    section_title: str | None = None,
+    section_id: str | None = None,
+) -> list[PopulatedTable]:
+    tables: list[PopulatedTable] = []
+
+    for table_item in table_items:
+        title, rows = rows_from_table_item(table_item, evidence_item_by_id)
+        normalized_table = TABLE_NORMALIZER.normalize(
+            {
+                "title": title,
+                "rows": rows,
+                "source": title,
+                "section_id": section_id,
+                "style_hint": style_hint_for_section(section_title),
+            }
+        )
+        if normalized_table is not None:
+            tables.append(to_populated_table(normalized_table))
+        elif rows:
+            logger.warning(
+                "DOCX table fallback for selected table %s in section %s",
+                title or "untitled",
+                section_title or "unknown",
+            )
+
+    return tables
+
+
+def build_section_population_inputs(
+    plan_payload: dict[str, Any],
+    extracted_content_by_id: dict[str, ExtractedContent],
+    section_drafts: list[AUDSectionDraft],
+    evidence_item_by_id: dict[str, EvidenceItem],
+    options: DocxGenerationOptions,
+) -> list[SectionPopulationInput]:
+    draft_lookup = build_section_draft_lookup(section_drafts)
+    section_inputs: list[SectionPopulationInput] = []
+
+    for section in iter_planned_sections(plan_payload):
+        render_context = build_section_render_context(
+            section,
+            extracted_content_by_id,
+            draft_lookup,
+            options,
+        )
+        if render_context is None:
+            continue
+
+        title = get_section_title(section)
+        if not title:
+            continue
+
+        paragraphs = [
+            clean_generated_text(paragraph)
+            for paragraph in render_context.paragraphs
+        ]
+        paragraphs = [paragraph for paragraph in paragraphs if paragraph]
+        paragraphs = dedupe_consecutive_text(paragraphs)
+        tables = to_populated_tables(
+            ensure_json_list(render_context.draft_json.get("included_tables")),
+            evidence_item_by_id,
+            section_title=title,
+            section_id=get_section_id(section),
+        )
+        tables = [*render_context.tables, *tables]
+
+        selected_images = normalize_included_images(
+            ensure_json_list(render_context.draft_json.get("included_images")),
+            evidence_item_by_id,
+        )
+        images = (
+            to_populated_images(
+                selected_images
+                or (
+                    collect_section_images(section, extracted_content_by_id)
+                    if options.include_images
+                    else []
+                )
+            )
+            if options.include_images
+            else []
+        )
+
+        section_inputs.append(
+            SectionPopulationInput(
+                title=title,
+                paragraphs=paragraphs,
+                tables=tables,
+                images=images,
+                source_role_basis=get_section_source_role_basis(section),
+            )
+        )
+
+    return section_inputs
+
+
+def add_populated_table(document: Document, populated_table: PopulatedTable) -> None:
+    if not populated_table.rows:
+        return
+
+    table_data = {
+        "title": populated_table.title,
+        "columns": populated_table.columns,
+        "rows": populated_table.rows,
+        "source": populated_table.source,
+        "section_id": populated_table.section_id,
+        "style_hint": populated_table.style_hint,
+    }
+    rendered_table = TABLE_RENDERER.add_table(document, table_data)
+    if rendered_table is None:
+        logger.warning(
+            "DOCX table fallback while rendering populated table %s",
+            populated_table.title or "untitled",
+        )
+
+
+def set_paragraph_spacing(paragraph, *, before: int = 0, after: int = BODY_SPACE_AFTER_PT) -> None:
+    paragraph.paragraph_format.space_before = Pt(before)
+    paragraph.paragraph_format.space_after = Pt(after)
+
+
+def is_process_flow_subheading(text: str) -> bool:
+    return normalize_title(text) == "process flow"
+
+
+def is_step_heading(text: str) -> bool:
+    return bool(re.match(r"^step\s+\d+\s*[:.-]\s+.+", text.strip(), flags=re.IGNORECASE))
+
+
+def is_step_bullet_candidate(text: str) -> bool:
+    normalized = normalize_title(text)
+    if not normalized:
+        return False
+
+    if is_step_heading(text) or is_process_flow_subheading(text):
+        return False
+
+    if normalized.startswith(("navigation:", "table ")):
+        return False
+
+    return True
+
+
+def add_body_paragraph(document: Document, text: str):
+    paragraph = document.add_paragraph(text)
+    set_paragraph_spacing(paragraph)
+    return paragraph
+
+
+def add_content_subheading(document: Document, text: str) -> None:
+    paragraph = document.add_paragraph()
+    set_paragraph_spacing(paragraph, before=6, after=4)
+    run = paragraph.add_run(text)
+    run.font.name = SECTION_HEADING_FONT_NAME
+    run.font.size = Pt(CONTENT_SUBHEADING_FONT_SIZE_PT)
+    run.font.bold = True
+    run.font.color.rgb = CONTENT_SUBHEADING_COLOR
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), SECTION_HEADING_FONT_NAME)
+
+
+def add_step_heading(document: Document, text: str) -> None:
+    paragraph = document.add_paragraph()
+    set_paragraph_spacing(paragraph, before=8, after=3)
+    paragraph.paragraph_format.keep_with_next = True
+    run = paragraph.add_run(text)
+    run.font.name = SECTION_HEADING_FONT_NAME
+    run.font.size = Pt(STEP_HEADING_FONT_SIZE_PT)
+    run.font.bold = True
+    run.font.color.rgb = STEP_HEADING_COLOR
+    run._element.rPr.rFonts.set(qn("w:eastAsia"), SECTION_HEADING_FONT_NAME)
+
+
+def add_readable_paragraph(document: Document, text: str) -> None:
+    cleaned = clean_generated_text(text)
+    if not cleaned:
+        return
+
+    bullet_match = re.match(r"^[-*]\s+(.+)$", cleaned)
+    if bullet_match:
+        add_bullet_paragraph(document, bullet_match.group(1))
+        return
+
+    add_body_paragraph(document, cleaned)
+
+
+def add_bullet_paragraph(document: Document, text: str) -> None:
+    try:
+        paragraph = document.add_paragraph(text, style="List Bullet")
+        set_paragraph_spacing(paragraph, after=1)
+        return
+    except KeyError:
+        pass
+
+    paragraph = document.add_paragraph(text)
+    paragraph_format = paragraph.paragraph_format
+    paragraph_format.space_before = Pt(0)
+    paragraph_format.space_after = Pt(1)
+    paragraph_format.left_indent = Pt(18)
+    paragraph_format.first_line_indent = Pt(-9)
+    p_pr = paragraph._p.get_or_add_pPr()
+    num_pr = OxmlElement("w:numPr")
+    ilvl = OxmlElement("w:ilvl")
+    ilvl.set(qn("w:val"), "0")
+    num_id = OxmlElement("w:numId")
+    num_id.set(qn("w:val"), "1")
+    num_pr.append(ilvl)
+    num_pr.append(num_id)
+    p_pr.append(num_pr)
+
+
+def add_section_paragraphs(document: Document, paragraphs: list[str]) -> None:
+    in_step_list = False
+
+    for paragraph in paragraphs:
+        cleaned = clean_generated_text(paragraph)
+        if not cleaned:
+            continue
+
+        if is_process_flow_subheading(cleaned):
+            add_content_subheading(document, cleaned)
+            in_step_list = False
+            continue
+
+        if is_step_heading(cleaned):
+            add_step_heading(document, cleaned)
+            in_step_list = True
+            continue
+
+        if in_step_list and is_step_bullet_candidate(cleaned):
+            add_bullet_paragraph(document, cleaned)
+            continue
+
+        add_readable_paragraph(document, cleaned)
+        in_step_list = False
+
+
+def add_populated_section(
+    document: Document,
+    section: PopulatedSection,
+    storage_service: StorageService,
+    temporary_dir: Path,
+) -> None:
+    add_generated_heading(document, section.title)
+
+    add_section_paragraphs(document, section.paragraphs)
+
+    for table in section.tables:
+        add_populated_table(document, table)
+
+    add_section_images(
+        document,
+        to_image_dicts(section.images),
+        storage_service,
+        temporary_dir,
+    )
 
 
 def add_source_conflict_summary_appendix(
@@ -1403,7 +2137,7 @@ def add_source_conflict_summary_appendix(
     if not warnings:
         return
 
-    document.add_heading("Source Conflict Summary", level=1)
+    add_generated_heading(document, "Source Conflict Summary")
     for warning in warnings:
         document.add_paragraph(warning)
 
@@ -1419,73 +2153,53 @@ def build_document(
     temporary_dir: Path,
     options: DocxGenerationOptions,
     settings: Settings,
+    template_path: Path,
 ) -> Document:
-    document = Document()
+    document = Document(str(template_path))
     current_date = utc_now().date()
-    author_name = project.name
+    section_inputs = build_section_population_inputs(
+        plan_payload=plan_payload,
+        extracted_content_by_id=extracted_content_by_id,
+        section_drafts=section_drafts,
+        evidence_item_by_id=evidence_item_by_id,
+        options=options,
+    )
+    document_model = TemplatePopulationService(
+        selected_template_path=template_path,
+        project=project,
+        final_plan=plan_payload,
+        section_drafts=section_drafts,
+        section_inputs=section_inputs,
+        open_points=open_points,
+        generated_date=current_date,
+    ).build_document_model()
 
-    title = document.add_heading("Application Understanding Document", level=0)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    add_key_value_paragraph(document, "Customer name", project.customer_name)
-    add_key_value_paragraph(document, "Module name", project.module_name)
-    add_key_value_paragraph(document, "Version", "1.0")
-
-    if author_name:
-        add_key_value_paragraph(document, "Author", author_name)
-
+    replace_template_placeholders(
+        document=document,
+        document_model=document_model,
+    )
+    truncate_template_after_cover(document)
     document.add_page_break()
-    add_document_version_history(document, author_name, current_date)
+    add_table_of_contents(document, document_model)
+    add_document_version_history(document, document_model)
 
-    document.add_heading("Purpose and Scope", level=1)
-    document.add_paragraph(
-        "This document provides a draft structure for internal review. Content will "
-        "be completed from validated source material and confirmed project inputs."
+    add_populated_section(
+        document,
+        document_model.purpose_scope,
+        storage_service,
+        temporary_dir,
     )
 
-    draft_lookup = build_section_draft_lookup(section_drafts)
-
-    for section in iter_planned_sections(plan_payload):
-        render_context = build_section_render_context(
-            section,
-            extracted_content_by_id,
-            draft_lookup,
-            options,
-        )
-        if render_context is None:
-            continue
-
-        title = section["title"]
-        document.add_heading(title, level=1)
-
-        if render_context.paragraphs:
-            for paragraph in render_context.paragraphs:
-                document.add_paragraph(paragraph)
-
-            if render_context.was_truncated:
-                document.add_paragraph(TRUNCATION_NOTE)
-        else:
-            document.add_paragraph(PLACEHOLDER_LINE)
-
-        add_section_tables(
+    for section in document_model.sections:
+        add_populated_section(
             document,
-            ensure_json_list(render_context.draft_json.get("included_tables")),
-            evidence_item_by_id,
+            section,
+            storage_service,
+            temporary_dir,
         )
-
-        if options.include_images:
-            selected_images = normalize_included_images(
-                ensure_json_list(render_context.draft_json.get("included_images")),
-                evidence_item_by_id,
-            )
-            add_section_images(
-                document,
-                selected_images or collect_section_images(section, extracted_content_by_id),
-                storage_service,
-                temporary_dir,
-            )
 
     if options.include_open_points:
-        add_open_points_table(document, open_points)
+        add_open_points_table(document, document_model.open_points)
 
     if settings.INTERNAL_DEBUG_OUTPUT:
         add_source_conflict_summary_appendix(document, plan_payload)
@@ -1532,6 +2246,12 @@ def generate_docx(
 
     with TemporaryDirectory() as temporary_dir:
         temporary_root = Path(temporary_dir)
+        template = TemplateResolver(
+            session=session,
+            project_id=project_id,
+            storage_service=resolved_storage_service,
+            settings=resolved_settings,
+        ).resolve(temporary_root)
         document = build_document(
             project=project,
             plan_payload=plan_payload,
@@ -1543,6 +2263,7 @@ def generate_docx(
             temporary_dir=temporary_root,
             options=resolved_options,
             settings=resolved_settings,
+            template_path=template.path,
         )
         output_path = temporary_root / filename
         document.save(output_path)

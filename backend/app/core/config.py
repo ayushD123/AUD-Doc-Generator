@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     SECTION_EVIDENCE_MAX_CHARS: int = 30000
     REQUIRE_LLM_ENHANCED_OPEN_POINTS: bool = True
     ALLOW_RAW_OPEN_POINTS_FALLBACK: bool = True
+    DEFAULT_AUD_TEMPLATE_PATH: str = "/backend/template/AUD_Editable_Template.docx"
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     INTERNAL_DEBUG_OUTPUT: bool = False
     BACKEND_CORS_ORIGINS: list[str] = [

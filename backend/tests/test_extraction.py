@@ -220,6 +220,7 @@ def test_extract_docx_from_uploaded_fdd(
         {
             "index": 1,
             "rows": [["Field", "Value"], ["Source", "FDD"]],
+            "section_title": "Order Management Overview",
         }
     ]
 

@@ -417,7 +417,7 @@ def test_open_points_refinement_failure_warns_and_continues_when_fallback_enable
             assert run.status == "completed_with_warnings"
             warnings = parse_json_list(run.warnings_json)
             assert warnings == [
-                "LLM Open Points enhancement failed; falling back to raw Open Points"
+                "LLM Open Points enhancement failed; continuing without raw Open Points fallback"
             ]
             assert "generate_docx" in calls
     finally:

@@ -26,6 +26,7 @@ from app.services.file_storage import (
 router = APIRouter(prefix="/projects/{project_id}/files", tags=["files"])
 
 ALLOWED_SOURCE_ROLES = {
+    "aud_template",
     "template_aud",
     "final_aud_sample",
     "fdd",

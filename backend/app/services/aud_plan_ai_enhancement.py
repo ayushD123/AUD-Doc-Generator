@@ -333,7 +333,7 @@ Authoritative business rules:
 - Open Points includes unresolved items only.
 - Configuration workbook validates and enriches; do not treat it as primary narrative when FDD exists and do not copy workbook rows blindly.
 - PPT images should be included only based on KT transcript/presenter focus and relevance.
-- Final AUD samples are style/reference only unless explicitly uploaded as template_aud.
+- Final AUD samples are style/reference only unless explicitly uploaded as aud_template or legacy template_aud.
 
 Return strict JSON only with this exact object shape:
 {{

@@ -176,6 +176,21 @@ def get_docx_table_text(document: Document) -> str:
     )
 
 
+def create_template_docx(path: Path, paragraphs: list[str] | None = None) -> None:
+    document = Document()
+    for paragraph in paragraphs or [
+        "Custom AUD Template",
+        "<Customer Name>",
+        "Oracle Fusion Cloud <Module Name>",
+        "<Author>",
+        "<Date>",
+        "<Table Of Content>",
+    ]:
+        document.add_paragraph(paragraph)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document.save(path)
+
+
 def test_generate_docx_job_creates_file_and_generated_document_record(
     client_session_and_storage: tuple[TestClient, sessionmaker, Path],
 ) -> None:
@@ -224,6 +239,10 @@ def test_generate_docx_job_creates_file_and_generated_document_record(
         "before customer sharing."
     ) in document_text
     table_text = get_docx_table_text(document)
+    assert "Version" in table_text
+    assert "1.0" in table_text
+    assert "Author" in table_text
+    assert "Asha Mehta" in table_text
     assert "Confirm order approval threshold." in table_text
     assert "This resolved question should not appear." not in table_text
 
@@ -237,6 +256,330 @@ def test_generate_docx_job_creates_file_and_generated_document_record(
     )
     assert download_response.status_code == 200
     assert download_response.content.startswith(b"PK")
+
+
+def test_generated_section_headings_use_template_font_and_spacing(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    heading = next(
+        paragraph
+        for paragraph in document.paragraphs
+        if paragraph.text == "Order Capture"
+    )
+    run = heading.runs[0]
+
+    assert run.font.name == docx_generation.SECTION_HEADING_FONT_NAME
+    assert run.font.size.pt == docx_generation.SECTION_HEADING_FONT_SIZE_PT
+    assert run.font.color.rgb == docx_generation.SECTION_HEADING_COLOR
+    assert heading.paragraph_format.space_before.pt == (
+        docx_generation.SECTION_HEADING_SPACE_BEFORE_PT
+    )
+    assert heading.paragraph_format.space_after.pt == (
+        docx_generation.SECTION_HEADING_SPACE_AFTER_PT
+    )
+    assert heading.paragraph_format.keep_with_next is True
+
+
+def test_uploaded_aud_template_is_used_when_present(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    template_storage_path = f"projects/{project_id}/uploads/uploaded-template.docx"
+    create_template_docx(
+        storage_root / template_storage_path,
+        [
+            "Uploaded template marker",
+            "<Customer Name>",
+            "Oracle Fusion Cloud <Module Name>",
+            "Prepared by <Author>",
+            "Generated on <Date>",
+            "<Table Of Content>",
+        ],
+    )
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        session.add(
+            UploadedFile(
+                project_id=project_id,
+                original_filename="uploaded-template.docx",
+                file_type="docx",
+                storage_path=template_storage_path,
+                source_role="aud_template",
+            )
+        )
+        session.commit()
+
+        caplog.set_level("INFO", logger="app.services.template_resolver")
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+
+    assert "Uploaded template marker" in document_text
+    assert "Vision Operations" in document_text
+    assert "Oracle Fusion Cloud Order Management" in document_text
+    assert "Prepared by Asha Mehta" in document_text
+    assert "Order Capture" in document_text
+    assert "<Customer Name>" not in document_text
+    assert "Using uploaded AUD template: " in caplog.text
+    assert template_storage_path in caplog.text
+
+
+def test_default_template_is_used_when_no_uploaded_template_exists(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    default_template_path = tmp_path / "default-template.docx"
+    create_template_docx(
+        default_template_path,
+        ["Default template marker", "<Customer Name>"],
+    )
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        caplog.set_level("INFO", logger="app.services.template_resolver")
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            settings=Settings(
+                DEFAULT_AUD_TEMPLATE_PATH=str(default_template_path),
+                _env_file=None,
+            ),
+        )
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+
+    assert "Default template marker" in document_text
+    assert "Vision Operations" in document_text
+    assert "Using default AUD template: " in caplog.text
+    assert str(default_template_path) in caplog.text
+
+
+def test_missing_default_template_fails_with_clear_error(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    tmp_path: Path,
+) -> None:
+    client, session_local, _ = client_session_and_storage
+    project_id = create_project(client)
+    missing_template_path = tmp_path / "missing-template.docx"
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        with pytest.raises(
+            FileNotFoundError,
+            match="Default AUD template file not found",
+        ):
+            docx_generation.generate_docx(
+                session,
+                project_id,
+                settings=Settings(
+                    DEFAULT_AUD_TEMPLATE_PATH=str(missing_template_path),
+                    _env_file=None,
+                ),
+            )
+
+
+def test_generated_aud_cover_page_uses_project_metadata(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    tmp_path: Path,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    template_path = tmp_path / "metadata-template.docx"
+    create_template_docx(
+        template_path,
+        [
+            "<Customer Name>",
+            "Oracle Fusion Cloud <Module Name>",
+            "Version 1.0",
+            "Author: <Author>",
+            "Date: <Date>",
+        ],
+    )
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            settings=Settings(
+                DEFAULT_AUD_TEMPLATE_PATH=str(template_path),
+                _env_file=None,
+            ),
+        )
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+
+    assert "Vision Operations" in document_text
+    assert "Oracle Fusion Cloud Order Management" in document_text
+    assert "Version 1.0" in document_text
+    assert "Author: Asha Mehta" in document_text
+    assert "Date: <Date>" not in document_text
+
+
+def test_template_body_sample_process_sections_are_removed(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    tmp_path: Path,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    template_path = tmp_path / "sample-process-template.docx"
+    create_template_docx(
+        template_path,
+        [
+            "<Customer Name>",
+            "Oracle Fusion Cloud <Module Name>",
+            "Document Version History",
+            "2. Process - <Process Name>",
+            "Subprocess description - <Subprocess Name>",
+            "<<Schedule Job List>>",
+        ],
+    )
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            settings=Settings(
+                DEFAULT_AUD_TEMPLATE_PATH=str(template_path),
+                _env_file=None,
+            ),
+        )
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+
+    assert "2. Process -" not in document_text
+    assert "Subprocess description -" not in document_text
+    assert "<<Schedule Job List>>" not in document_text
+    assert "<Process Name>" not in document_text
+
+
+def test_unsupported_roles_and_documents_referred_are_omitted(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    tmp_path: Path,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    template_path = tmp_path / "clean-template.docx"
+    create_template_docx(template_path, ["<Customer Name>", "Document Version History"])
+
+    with session_local() as session:
+        session.add(
+            AUDPlan(
+                project_id=project_id,
+                status="draft",
+                plan_json=json.dumps(
+                    {
+                        "ai_enhanced_plan": {
+                            "sections": [
+                                {
+                                    "title": "Roles and Functions",
+                                    "include_in_aud": True,
+                                    "source_role_basis": "unknown",
+                                    "source_content_ids": [],
+                                },
+                                {
+                                    "title": "Documents Referred",
+                                    "include_in_aud": True,
+                                    "source_role_basis": "unknown",
+                                    "source_content_ids": [],
+                                },
+                            ]
+                        },
+                        "sections": [
+                            {"title": "Documents Referred", "include_in_aud": True}
+                        ],
+                    }
+                ),
+            )
+        )
+        session.commit()
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            settings=Settings(
+                DEFAULT_AUD_TEMPLATE_PATH=str(template_path),
+                _env_file=None,
+            ),
+        )
+        output_path = storage_root / generated_document.storage_path
+
+    document_text = "\n".join(
+        paragraph.text for paragraph in Document(output_path).paragraphs
+    )
+
+    assert "Roles and Functions" not in document_text
+    assert "Documents Referred" not in document_text
+
+
+def test_generated_aud_has_no_raw_template_placeholders(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    tmp_path: Path,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    template_path = tmp_path / "placeholder-template.docx"
+    create_template_docx(
+        template_path,
+        [
+            "<Customer Name>",
+            "Oracle Fusion Cloud <Module Name>",
+            "Document Version History",
+            "<Provide the applicable content for this section.>",
+            "<Placeholder text>",
+            "<<Unsresolved or missing information to be listed here>>",
+        ],
+    )
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            settings=Settings(
+                DEFAULT_AUD_TEMPLATE_PATH=str(template_path),
+                _env_file=None,
+            ),
+        )
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    table_text = get_docx_table_text(document)
+    combined_text = f"{document_text}\n{table_text}"
+
+    assert "<Provide the applicable content for this section.>" not in combined_text
+    assert "<Placeholder text>" not in combined_text
+    assert "<<Unsresolved or missing information to be listed here>>" not in combined_text
+    assert "<Customer Name>" not in combined_text
+    assert "<Module Name>" not in combined_text
 
 
 def test_docx_open_points_prefers_llm_enhanced_and_excludes_raw(
@@ -269,7 +612,7 @@ def test_docx_open_points_prefers_llm_enhanced_and_excludes_raw(
     assert metadata["open_points_fallback"] is False
 
 
-def test_docx_open_points_raw_fallback_requires_failed_refinement(
+def test_docx_open_points_raw_fallback_is_not_rendered(
     client_session_and_storage: tuple[TestClient, sessionmaker, Path],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -318,12 +661,12 @@ def test_docx_open_points_raw_fallback_requires_failed_refinement(
     disabled_table_text = get_docx_table_text(Document(disabled_path))
 
     assert "Confirm warehouse calendar ownership." not in pending_table_text
-    assert "Confirm warehouse calendar ownership." in fallback_table_text
+    assert "Confirm warehouse calendar ownership." not in fallback_table_text
     assert "Confirm warehouse calendar ownership." not in disabled_table_text
-    assert fallback_metadata["open_points_fallback"] is True
+    assert fallback_metadata["open_points_fallback"] is False
     assert (
         "LLM Open Points enhancement failed; falling back to raw Open Points"
-        in caplog.text
+        not in caplog.text
     )
 
 
@@ -417,6 +760,255 @@ def test_accepted_ai_draft_is_preferred_over_rule_based_content(
     )
     assert "Capture Mode" in table_text
     assert "Manual" in table_text
+
+
+def test_structured_source_table_does_not_render_as_plain_text_dump(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        uploaded_file = UploadedFile(
+            project_id=project_id,
+            original_filename="order-management-fdd.docx",
+            file_type="docx",
+            storage_path=f"projects/{project_id}/uploads/order-management-fdd.docx",
+            source_role="fdd",
+        )
+        session.add(uploaded_file)
+        session.flush()
+        extracted_content = ExtractedContent(
+            project_id=project_id,
+            uploaded_file_id=uploaded_file.id,
+            content_type="docx",
+            title=uploaded_file.original_filename,
+            text_content=(
+                "[Heading: Order Capture]\n\n"
+                "Order capture setup is confirmed.\n\n"
+                "[Table 1]\n"
+                "Field | Value\n"
+                "Capture Mode | Manual"
+            ),
+            json_content=json.dumps(
+                {
+                    "source_role": "fdd",
+                    "is_golden_source": True,
+                    "headings": [{"text": "Order Capture", "level": 1}],
+                    "tables": [
+                        {
+                            "index": 1,
+                            "section_title": "Order Capture",
+                            "rows": [
+                                ["Field", "Value"],
+                                ["Capture Mode", "Manual"],
+                            ],
+                        }
+                    ],
+                }
+            ),
+        )
+        session.add(extracted_content)
+        session.flush()
+        session.add(
+            AUDPlan(
+                project_id=project_id,
+                status="draft",
+                plan_json=json.dumps(
+                    {
+                        "sections": [
+                            {
+                                "title": "Order Capture",
+                                "include_in_aud": True,
+                                "source_role_basis": "fdd",
+                                "source_content_ids": [extracted_content.id],
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+        caplog.set_level("WARNING", logger="app.services.docx_generation")
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    table_text = get_docx_table_text(document)
+
+    assert "[Table 1]" not in paragraph_text
+    assert "Field | Value" not in paragraph_text
+    assert "Capture Mode | Manual" not in paragraph_text
+    assert "Field" in table_text
+    assert "Value" in table_text
+    assert "Capture Mode" in table_text
+    assert "Manual" in table_text
+    assert "DOCX table fallback" not in caplog.text
+
+
+def test_long_section_content_is_retained_without_summary_label(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        uploaded_file = UploadedFile(
+            project_id=project_id,
+            original_filename="order-management-fdd.docx",
+            file_type="docx",
+            storage_path=f"projects/{project_id}/uploads/order-management-fdd.docx",
+            source_role="fdd",
+        )
+        session.add(uploaded_file)
+        session.flush()
+        section_paragraphs = [
+            "[Heading: Order Details]",
+            "Order capture follows the validated process definition.",
+            "Order validation checks account, site, and order type before booking.",
+            "Pricing validation confirms list price, discounts, and manual adjustments.",
+            "Fulfillment validation confirms orchestration process assignment.",
+            "Billing validation confirms invoice trigger and billing cycle.",
+            "Return validation confirms RMA type and credit behavior.",
+        ]
+        extracted_content = ExtractedContent(
+            project_id=project_id,
+            uploaded_file_id=uploaded_file.id,
+            content_type="docx",
+            title=uploaded_file.original_filename,
+            text_content="\n\n".join(section_paragraphs),
+            json_content=json.dumps(
+                {
+                    "source_role": "fdd",
+                    "is_golden_source": True,
+                    "headings": [{"text": "Order Details", "level": 1}],
+                }
+            ),
+        )
+        session.add(extracted_content)
+        session.flush()
+        session.add(
+            AUDPlan(
+                project_id=project_id,
+                status="draft",
+                plan_json=json.dumps(
+                    {
+                        "sections": [
+                            {
+                                "title": "Order Details",
+                                "include_in_aud": True,
+                                "source_role_basis": "fdd",
+                                "source_content_ids": [extracted_content.id],
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+
+    assert "Additional details available in source document." not in paragraph_text
+    assert "Additional source details summarized:" not in paragraph_text
+    assert "Billing validation confirms invoice trigger and billing cycle." in paragraph_text
+    assert "Return validation confirms RMA type and credit behavior." in paragraph_text
+
+
+def test_process_flow_uses_step_headings_and_bullets(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        uploaded_file = UploadedFile(
+            project_id=project_id,
+            original_filename="order-management-fdd.docx",
+            file_type="docx",
+            storage_path=f"projects/{project_id}/uploads/order-management-fdd.docx",
+            source_role="fdd",
+        )
+        session.add(uploaded_file)
+        session.flush()
+        extracted_content = ExtractedContent(
+            project_id=project_id,
+            uploaded_file_id=uploaded_file.id,
+            content_type="docx",
+            title=uploaded_file.original_filename,
+            text_content="\n\n".join(
+                [
+                    "[Heading: Process - Export Order Process (Customer Care)]",
+                    "Process Flow",
+                    "The Export Order Process for Customer Care follows these sequential steps:",
+                    "Step 1: Create Quotation",
+                    "Create a Sales Order with Order Type = Quotation",
+                    "Add items, freight charges, and additional information",
+                    "Step 2: Create Standard Export Order",
+                    "Create a Standard Export order by copying from the Quote order",
+                ]
+            ),
+            json_content=json.dumps(
+                {
+                    "source_role": "fdd",
+                    "is_golden_source": True,
+                    "headings": [
+                        {
+                            "text": "Process - Export Order Process (Customer Care)",
+                            "level": 1,
+                        }
+                    ],
+                }
+            ),
+        )
+        session.add(extracted_content)
+        session.flush()
+        session.add(
+            AUDPlan(
+                project_id=project_id,
+                status="draft",
+                plan_json=json.dumps(
+                    {
+                        "sections": [
+                            {
+                                "title": "Process - Export Order Process (Customer Care)",
+                                "include_in_aud": True,
+                                "source_role_basis": "fdd",
+                                "source_content_ids": [extracted_content.id],
+                            }
+                        ]
+                    }
+                ),
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    paragraphs_by_text = {paragraph.text: paragraph for paragraph in document.paragraphs}
+    paragraph_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+    bullet_texts = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if paragraph.style.name == "List Bullet"
+        or paragraph._p.pPr is not None
+        and paragraph._p.pPr.numPr is not None
+    ]
+
+    assert "Attributes" not in paragraph_text
+    assert paragraphs_by_text["Process Flow"].runs[0].bold is True
+    assert paragraphs_by_text["Step 1: Create Quotation"].runs[0].bold is True
+    assert "Create a Sales Order with Order Type = Quotation" in bullet_texts
+    assert "Add items, freight charges, and additional information" in bullet_texts
 
 
 def test_draft_section_requires_include_draft_sections_option(
@@ -606,11 +1198,11 @@ def test_ai_draft_selected_image_is_included_when_enabled(
 
     document = Document(output_path)
     document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-    assert len(document.inline_shapes) == 1
+    assert len(document.inline_shapes) >= 1
     assert "Source image from slide 10: Order Capture selected image" in document_text
 
 
-def test_missing_section_content_uses_placeholder(
+def test_missing_section_content_is_omitted_without_raw_placeholder(
     client_session_and_storage: tuple[TestClient, sessionmaker, Path],
 ) -> None:
     client, session_local, storage_root = client_session_and_storage
@@ -671,8 +1263,8 @@ def test_missing_section_content_uses_placeholder(
     document_text = "\n".join(
         paragraph.text for paragraph in Document(output_path).paragraphs
     )
-    assert "Missing Section" in document_text
-    assert "<Content not available in provided source material>" in document_text
+    assert "Missing Section" not in document_text
+    assert "<Content not available in provided source material>" not in document_text
 
 
 def test_fdd_content_has_priority_when_mapped_with_ppt(
@@ -871,7 +1463,7 @@ def test_docx_generation_includes_ppt_support_sections_with_fdd(
     assert "Pricing Assignments" in document_text
     assert "Pricing strategy assignment precedence." in document_text
     assert "Source image from slide 3: Pricing Assignments" in document_text
-    assert len(document.inline_shapes) == 1
+    assert len(document.inline_shapes) >= 1
 
 
 def test_docx_generation_carries_enterprise_structure_content_and_image(
@@ -957,11 +1549,11 @@ def test_docx_generation_carries_enterprise_structure_content_and_image(
         if paragraph.style.name.startswith("Heading")
     ]
 
-    assert headings[2:4] == ["Introduction", "Enterprise Structure"]
+    assert headings.index("Introduction") < headings.index("Enterprise Structure")
     assert "Business Unit: IT_BLCM_EUR_BU" in document_text
     assert "Legal Entity | Biolchim S.p.A." in document_text
     assert "Source image from DOCX section: Enterprise Structure" in document_text
-    assert len(document.inline_shapes) == 1
+    assert len(document.inline_shapes) >= 1
 
 
 def test_stale_standard_plan_is_refreshed_before_docx_generation(
@@ -1173,7 +1765,7 @@ def test_ppt_images_are_added_for_matching_section(
 
     document = Document(output_path)
     document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
-    assert len(document.inline_shapes) == 2
+    assert len(document.inline_shapes) >= 2
     assert "Source image from slide 1: Fulfillment Flow" in document_text
     assert "Source image from slide 3: Configuration Snapshot" in document_text
     assert "Source image from slide 2: Thank You" not in document_text
@@ -1280,7 +1872,7 @@ def test_single_word_ppt_title_does_not_overmatch_compound_section(
     document = Document(output_path)
     document_text = "\n".join(paragraph.text for paragraph in document.paragraphs)
 
-    assert len(document.inline_shapes) == 1
+    assert len(document.inline_shapes) >= 1
     assert "Source image from slide 1: Service Mappings (OM/Pricing)" in document_text
     assert "Source image from slide 2: Pricing" not in document_text
 

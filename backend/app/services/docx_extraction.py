@@ -230,7 +230,13 @@ def extract_docx(
         elif isinstance(block, Table):
             table_count += 1
             rows = extract_table_rows(block)
-            tables.append({"index": table_count, "rows": rows})
+            tables.append(
+                {
+                    "index": table_count,
+                    "rows": rows,
+                    "section_title": current_section_title,
+                }
+            )
             rendered_rows = [" | ".join(cell for cell in row) for row in rows]
             text_sections.append(
                 "\n".join([f"[Table {table_count}]", *rendered_rows])

@@ -1,20 +1,20 @@
-from pathlib import Path
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import ExtractedContent, UploadedFile
 from app.schemas.source_priority import (
     SourceFileReference,
     SourcePriorityItem,
     SourcePriorityReport,
 )
-
-DEFAULT_TEMPLATE_PATH = (
-    Path(__file__).resolve().parents[2] / "template" / "AUD_Editable_Template.docx"
+from app.services.template_resolver import (
+    EXPLICIT_AUD_TEMPLATE_SOURCE_ROLES,
+    resolve_configured_template_path,
 )
 
 SOURCE_ROLE_ORDER = [
+    "aud_template",
     "template_aud",
     "fdd",
     "supporting_doc",
@@ -54,7 +54,7 @@ def build_priority_order(
     if has_explicit_template:
         priority_order.append(
             SourcePriorityItem(
-                source="template_aud",
+                source="aud_template",
                 priority=priority,
                 purpose="Controls AUD output structure and formatting.",
                 rule="Use the explicitly uploaded template AUD.",
@@ -184,7 +184,9 @@ def build_source_priority_report(
         sorted(source_roles_present.difference(SOURCE_ROLE_ORDER))
     )
 
-    has_explicit_template = "template_aud" in source_roles_present
+    has_explicit_template = bool(
+        source_roles_present.intersection(EXPLICIT_AUD_TEMPLATE_SOURCE_ROLES)
+    )
     recommended_default_template_needed = not has_explicit_template
     golden_source_files = [
         build_file_reference(uploaded_file, extracted_content_by_file_id)
@@ -203,7 +205,11 @@ def build_source_priority_report(
             "should control structure and formatting."
         )
 
-        if not DEFAULT_TEMPLATE_PATH.exists():
+        settings = get_settings()
+        default_template_path = resolve_configured_template_path(
+            settings.DEFAULT_AUD_TEMPLATE_PATH
+        )
+        if not default_template_path.exists():
             warnings.append(
                 "Default SCM AUD template file was not found under backend/template."
             )
@@ -234,7 +240,7 @@ def build_source_priority_report(
 
     if (
         "final_aud_sample" in source_roles_present
-        and "template_aud" not in source_roles_present
+        and not has_explicit_template
     ):
         notes.append(
             "Final AUD samples are style/reference only because none is marked as "

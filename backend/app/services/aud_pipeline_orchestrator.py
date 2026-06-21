@@ -12,12 +12,14 @@ from sqlalchemy.orm import Session
 
 from app.db.base import utc_now
 from app.models import AUDGenerationRun, GeneratedDocument, Job, Project, UploadedFile
-from app.services.docx_generation import OPEN_POINTS_FALLBACK_WARNING
 from app.services.open_points_ai_refinement import mark_open_point_refinement_failed
 
 logger = logging.getLogger(__name__)
 
 StageProcessor = Callable[[Session, Job], None]
+OPEN_POINTS_REFINEMENT_WARNING = (
+    "LLM Open Points enhancement failed; continuing without raw Open Points fallback"
+)
 
 
 class AUDPipelineStage(StrEnum):
@@ -310,7 +312,7 @@ class AUDPipelineOrchestrator:
                         self.session,
                         self.generation_run.project_id,
                     )
-                    self.add_warning(OPEN_POINTS_FALLBACK_WARNING)
+                    self.add_warning(OPEN_POINTS_REFINEMENT_WARNING)
                     return
 
             raise RuntimeError(stage_job.message or f"{stage_job.job_type} failed.")

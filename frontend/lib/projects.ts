@@ -17,6 +17,7 @@ export type ProjectCreatePayload = {
 };
 
 export type SourceRole =
+  | "aud_template"
   | "template_aud"
   | "final_aud_sample"
   | "fdd"
@@ -187,6 +188,7 @@ export type AUDSectionDraft = {
 };
 
 export const sourceRoles: SourceRole[] = [
+  "aud_template",
   "template_aud",
   "final_aud_sample",
   "fdd",
@@ -199,6 +201,7 @@ export const sourceRoles: SourceRole[] = [
 ];
 
 export const sourceRoleLabels: Record<SourceRole, string> = {
+  aud_template: "AUD Template",
   template_aud: "Template AUD",
   final_aud_sample: "Final AUD Sample",
   fdd: "FDD - Functional Design Document",

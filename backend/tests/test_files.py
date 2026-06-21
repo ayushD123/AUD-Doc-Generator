@@ -136,6 +136,28 @@ def test_upload_accepts_scanned_image(client: TestClient) -> None:
     assert uploaded_file["source_role"] == "supporting_doc"
 
 
+def test_upload_accepts_aud_template_role(client: TestClient) -> None:
+    project_id = create_project(client)
+
+    response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "aud_template"},
+        files={
+            "file": (
+                "aud-template.docx",
+                b"fake docx content",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    uploaded_file = response.json()
+    assert uploaded_file["original_filename"] == "aud-template.docx"
+    assert uploaded_file["file_type"] == "docx"
+    assert uploaded_file["source_role"] == "aud_template"
+
+
 def test_upload_rejects_unsupported_file(client: TestClient) -> None:
     project_id = create_project(client)
 
