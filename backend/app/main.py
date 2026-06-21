@@ -39,7 +39,7 @@ def create_app(create_tables_on_startup: bool = True) -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.BACKEND_CORS_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["DELETE", "GET", "POST"],
         allow_headers=["*"],
     )
     application.include_router(health_router)

@@ -254,6 +254,72 @@ def test_config_evidence_can_be_primary_when_no_narrative_source_matches(
         engine.dispose()
 
 
+def test_empty_ai_enhanced_sections_fall_back_to_deterministic_plan(
+    tmp_path: Path,
+) -> None:
+    session_local, engine = make_session(tmp_path)
+
+    try:
+        with session_local() as session:
+            project = create_project_with_plan_and_evidence(session)
+            aud_plan = session.scalar(
+                select(AUDPlan).where(AUDPlan.project_id == project.id)
+            )
+            assert aud_plan is not None
+            plan_payload = json.loads(aud_plan.plan_json)
+            plan_payload["ai_enhanced_plan"] = {
+                "document_strategy": {"content_golden_source": "fdd"},
+                "sections": [],
+            }
+            aud_plan.plan_json = json.dumps(plan_payload)
+            session.commit()
+
+            packs = build_section_evidence_packs(
+                session,
+                project.id,
+                settings=Settings(_env_file=None),
+            )
+
+        assert len(packs) == 1
+        assert packs[0].section_title == "Enterprise Structure"
+    finally:
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_unusable_ai_enhanced_sections_fall_back_to_deterministic_plan(
+    tmp_path: Path,
+) -> None:
+    session_local, engine = make_session(tmp_path)
+
+    try:
+        with session_local() as session:
+            project = create_project_with_plan_and_evidence(session)
+            aud_plan = session.scalar(
+                select(AUDPlan).where(AUDPlan.project_id == project.id)
+            )
+            assert aud_plan is not None
+            plan_payload = json.loads(aud_plan.plan_json)
+            plan_payload["ai_enhanced_plan"] = {
+                "document_strategy": {"content_golden_source": "fdd"},
+                "sections": [{"reason": "Missing title from LLM output."}],
+            }
+            aud_plan.plan_json = json.dumps(plan_payload)
+            session.commit()
+
+            packs = build_section_evidence_packs(
+                session,
+                project.id,
+                settings=Settings(_env_file=None),
+            )
+
+        assert len(packs) == 1
+        assert packs[0].section_title == "Enterprise Structure"
+    finally:
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
 def test_build_section_evidence_packs_job_and_list_route(tmp_path: Path) -> None:
     session_local, engine = make_session(tmp_path)
     app = create_app(create_tables_on_startup=False)

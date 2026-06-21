@@ -163,3 +163,56 @@ def test_list_files(client: TestClient) -> None:
     assert len(files) == 1
     assert files[0]["original_filename"] == "notes.txt"
     assert files[0]["source_role"] == "supporting_doc"
+
+
+def test_delete_file_removes_metadata_and_storage(client: TestClient) -> None:
+    project_id = create_project(client)
+    upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "supporting_doc"},
+        files={"file": ("notes.txt", b"notes", "text/plain")},
+    )
+    uploaded_file = upload_response.json()
+    saved_file = client.storage_root / uploaded_file["storage_path"]
+
+    response = client.delete(f"/projects/{project_id}/files/{uploaded_file['id']}")
+
+    assert response.status_code == 204
+    assert not saved_file.exists()
+
+    list_response = client.get(f"/projects/{project_id}/files")
+
+    assert list_response.status_code == 200
+    assert list_response.json() == []
+
+
+def test_delete_file_requires_matching_project(client: TestClient) -> None:
+    project_id = create_project(client)
+    other_project_id = create_project(client)
+    upload_response = client.post(
+        f"/projects/{project_id}/files",
+        data={"source_role": "supporting_doc"},
+        files={"file": ("notes.txt", b"notes", "text/plain")},
+    )
+    uploaded_file = upload_response.json()
+
+    response = client.delete(
+        f"/projects/{other_project_id}/files/{uploaded_file['id']}"
+    )
+
+    assert response.status_code == 404
+
+
+def test_delete_file_cors_preflight_is_allowed(client: TestClient) -> None:
+    project_id = create_project(client)
+    response = client.options(
+        f"/projects/{project_id}/files/file-123",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "DELETE" in response.headers["access-control-allow-methods"]

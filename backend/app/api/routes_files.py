@@ -2,12 +2,20 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import delete as sqlalchemy_delete
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.db.base import new_uuid
 from app.db.session import get_db
-from app.models import Project, UploadedFile
+from app.models import (
+    EvidenceItem,
+    ExtractedContent,
+    OpenPoint,
+    Project,
+    SourceSummary,
+    UploadedFile,
+)
 from app.schemas.uploaded_file import UploadedFileRead
 from app.services.file_storage import (
     ALLOWED_FILE_EXTENSIONS,
@@ -117,3 +125,81 @@ def list_project_files(
         .order_by(UploadedFile.created_at.desc())
     )
     return list(db.scalars(statement))
+
+
+@router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project_file(
+    project_id: str,
+    file_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    storage_service: Annotated[StorageService, Depends(get_file_storage)],
+) -> None:
+    project = db.get(Project, project_id)
+
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found.",
+        )
+
+    uploaded_file = db.get(UploadedFile, file_id)
+
+    if uploaded_file is None or uploaded_file.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Uploaded file not found.",
+        )
+
+    extracted_content_ids = list(
+        db.scalars(
+            select(ExtractedContent.id).where(
+                ExtractedContent.project_id == project_id,
+                ExtractedContent.uploaded_file_id == file_id,
+            )
+        )
+    )
+
+    storage_service.delete(uploaded_file.storage_path)
+
+    evidence_conditions = [
+        EvidenceItem.source_uploaded_file_id == file_id,
+    ]
+
+    if extracted_content_ids:
+        evidence_conditions.append(
+            EvidenceItem.source_extracted_content_id.in_(extracted_content_ids)
+        )
+
+    open_point_conditions = [
+        OpenPoint.source_file_id == file_id,
+    ]
+
+    if extracted_content_ids:
+        open_point_conditions.append(OpenPoint.source_content_id.in_(extracted_content_ids))
+
+    db.execute(
+        sqlalchemy_delete(EvidenceItem).where(
+            EvidenceItem.project_id == project_id,
+            or_(*evidence_conditions),
+        )
+    )
+    db.execute(
+        sqlalchemy_delete(SourceSummary).where(
+            SourceSummary.project_id == project_id,
+            SourceSummary.source_uploaded_file_id == file_id,
+        )
+    )
+    db.execute(
+        sqlalchemy_delete(OpenPoint).where(
+            OpenPoint.project_id == project_id,
+            or_(*open_point_conditions),
+        )
+    )
+    db.execute(
+        sqlalchemy_delete(ExtractedContent).where(
+            ExtractedContent.project_id == project_id,
+            ExtractedContent.uploaded_file_id == file_id,
+        )
+    )
+    db.delete(uploaded_file)
+    db.commit()

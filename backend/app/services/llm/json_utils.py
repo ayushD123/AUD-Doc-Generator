@@ -40,8 +40,9 @@ def strip_markdown_json_fence(value: str) -> str:
     opening = lines[0].strip().lower()
     closing = lines[-1].strip()
 
-    if opening in {"```", "```json", "```javascript", "```js"} and closing == "```":
-        return "\n".join(lines[1:-1]).strip()
+    if opening in {"```", "```json", "```javascript", "```js"}:
+        body_lines = lines[1:-1] if closing == "```" else lines[1:]
+        return "\n".join(body_lines).strip()
 
     return stripped
 
@@ -115,14 +116,74 @@ def remove_trailing_commas(value: str) -> str:
     return "".join(result)
 
 
+def escape_control_characters_in_strings(value: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escaped = False
+
+    for current in value:
+        if in_string:
+            if escaped:
+                result.append(current)
+                escaped = False
+            elif current == "\\":
+                result.append(current)
+                escaped = True
+            elif current == '"':
+                result.append(current)
+                in_string = False
+            elif current == "\n":
+                result.append("\\n")
+            elif current == "\r":
+                result.append("\\r")
+            elif current == "\t":
+                result.append("\\t")
+            elif ord(current) < 32:
+                result.append(json.dumps(current)[1:-1])
+            else:
+                result.append(current)
+            continue
+
+        result.append(current)
+        if current == '"':
+            in_string = True
+
+    return "".join(result)
+
+
+def iter_json_cleanup_candidates(value: str) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(candidate: str) -> None:
+        if candidate not in seen:
+            seen.add(candidate)
+            candidates.append(candidate)
+
+    add(value)
+    add(remove_trailing_commas(value))
+
+    for candidate in list(candidates):
+        escaped = escape_control_characters_in_strings(candidate)
+        add(escaped)
+        add(remove_trailing_commas(escaped))
+
+    return candidates
+
+
 def load_json_with_cleanup(value: str) -> object:
-    try:
-        return json.loads(value)
-    except json.JSONDecodeError:
-        cleaned = remove_trailing_commas(value)
-        if cleaned == value:
-            raise
-        return json.loads(cleaned)
+    last_error: json.JSONDecodeError | None = None
+
+    for candidate in iter_json_cleanup_candidates(value):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+
+    return json.loads(value)
 
 
 def build_invalid_json_error_message(value: str) -> str:

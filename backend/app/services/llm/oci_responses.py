@@ -1,3 +1,4 @@
+from time import sleep
 from typing import Any
 
 from app.core.config import Settings, get_settings
@@ -5,6 +6,9 @@ from app.services.llm.base import (
     LLMConfigurationError,
     LLMError,
     LLMService,
+    is_retryable_llm_error,
+    positive_attempt_count,
+    retry_delay_seconds,
     validate_prompt_length,
 )
 from app.services.llm.json_utils import parse_json_response
@@ -21,6 +25,7 @@ class OCIResponsesLLMService(LLMService):
     ) -> None:
         self.settings = settings or get_settings()
         self.client = client or self.build_client()
+        self._sleep = sleep
 
     def build_client(self) -> Any:
         self._require_setting("OCI_GENAI_REGION", self.settings.OCI_GENAI_REGION)
@@ -57,12 +62,10 @@ class OCIResponsesLLMService(LLMService):
         )
         self._require_setting("OCI_GENAI_MODEL_ID", self.settings.OCI_GENAI_MODEL_ID)
 
-        response = self.client.responses.create(
-            **self._build_response_payload(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=temperature,
-            )
+        response = self._create_response_with_retry(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
         )
         return self._extract_output_text(response)
 
@@ -79,6 +82,39 @@ class OCIResponsesLLMService(LLMService):
         return parse_json_response(
             self.generate_text(prompt=prompt, system_prompt=json_system_prompt)
         )
+
+    def _create_response_with_retry(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str | None,
+        temperature: float | None,
+    ) -> Any:
+        attempts = positive_attempt_count(self.settings.OCI_GENAI_RETRY_MAX_ATTEMPTS)
+
+        for attempt_index in range(attempts):
+            try:
+                return self.client.responses.create(
+                    **self._build_response_payload(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                    )
+                )
+            except Exception as error:
+                is_last_attempt = attempt_index >= attempts - 1
+                if is_last_attempt or not is_retryable_llm_error(error):
+                    raise
+
+                self._sleep(
+                    retry_delay_seconds(
+                        attempt_index=attempt_index,
+                        base_seconds=self.settings.OCI_GENAI_RETRY_BASE_SECONDS,
+                        max_seconds=self.settings.OCI_GENAI_RETRY_MAX_SECONDS,
+                    )
+                )
+
+        raise LLMError("OCI Responses API retry loop ended unexpectedly.")
 
     def _build_response_payload(
         self,

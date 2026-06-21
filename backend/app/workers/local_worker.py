@@ -1076,7 +1076,8 @@ def process_generate_section_drafts_ai_job(
         job.status = "completed_with_warnings"
         job.message = (
             f"Generated {len(result.drafts)} section draft(s) with "
-            f"{len(result.warnings)} warning(s)."
+            f"{len(result.warnings)} warning(s). Warnings: "
+            + "; ".join(result.warnings)
         )
     elif result.warnings and not result.drafts:
         job.status = "failed"
@@ -1120,7 +1121,10 @@ def process_refine_open_points_ai_job(
     job: Job,
     sleep_seconds: float = 0.2,
 ) -> None:
-    from app.services.open_points_ai_refinement import refine_open_points_ai
+    from app.services.open_points_ai_refinement import (
+        mark_open_point_refinement_failed,
+        refine_open_points_ai,
+    )
 
     job.status = "running"
     job.progress = 10
@@ -1129,7 +1133,12 @@ def process_refine_open_points_ai_job(
 
     sleep(sleep_seconds)
 
-    result = refine_open_points_ai(session, job.project_id)
+    try:
+        result = refine_open_points_ai(session, job.project_id)
+    except Exception:
+        session.rollback()
+        mark_open_point_refinement_failed(session, job.project_id)
+        raise
 
     sleep(sleep_seconds)
 

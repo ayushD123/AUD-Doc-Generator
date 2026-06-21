@@ -161,6 +161,16 @@ management flows, but the current adapter expects the bucket to already exist.
 The app uses SDK config-file authentication first; instance principals and
 resource principals are not wired in this phase.
 
+Large OCI uploads use multipart parallel upload by default once the file is at
+least 50 MiB. Tune these values if the network or tenancy behaves better with
+larger parts or fewer workers:
+
+```powershell
+$env:OCI_MULTIPART_UPLOAD_THRESHOLD_BYTES = "52428800"
+$env:OCI_MULTIPART_UPLOAD_PART_SIZE_BYTES = "10485760"
+$env:OCI_MULTIPART_UPLOAD_PARALLEL_WORKERS = "4"
+```
+
 The database stores storage keys, not OCI URLs. Upload, extraction image writes,
 DOCX output writes, and generated-document downloads go through the active
 storage implementation.
@@ -447,13 +457,13 @@ The local worker picks pending jobs from the database and processes:
 - `generate_aud_plan`: creates a deterministic draft AUD plan JSON from extracted content and source-priority rules.
 - `build_evidence_index`: converts extracted content into normalized, prioritized evidence items for future AUD planning and drafting.
 - `generate_source_summaries_ai`: groups evidence by source file and source role, asks the configured LLM for strict JSON summaries, and stores source summaries for later AUD enhancement.
-- `enhance_aud_plan_ai`: asks the configured LLM to improve section selection, naming, ordering, and source mapping while preserving deterministic source-priority authority.
+- `enhance_aud_plan_ai`: asks the configured LLM to improve section selection, naming, ordering, and source mapping while preserving deterministic source-priority authority. If the LLM returns strategy-only JSON without sections after retry, the backend carries forward deterministic plan sections and records an AI plan warning instead of failing the pipeline.
 - `build_section_evidence_packs`: deterministically curates bounded evidence packets per AUD section from the latest plan, evidence index, source summaries, and source-priority rules. It does not call an LLM.
 - `generate_section_drafts_ai`: asks the configured LLM for one strict JSON section draft per evidence pack, stores reviewable drafts, and inserts deduped open point candidates.
 - `enrich_with_document_understanding`: optionally enriches eligible uploaded files with OCI Document Understanding OCR/table/classification output without replacing local extraction.
 - `extract_open_points`: scans extracted content for unresolved questions and stores deduplicated open points.
-- `refine_open_points_ai`: asks the configured LLM to clean, deduplicate, and classify existing Open Points plus candidates from source summaries, AUD plans, and section drafts, then marks duplicate existing rows as `Removed` and creates refined `Open` rows with readable evidence text plus separate API metadata.
-- `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, unresolved open points, and writes it through the configured storage backend.
+- `refine_open_points_ai`: asks the configured LLM to clean, deduplicate, and classify existing Open Points plus candidates from source summaries, AUD plans, and section drafts, then marks duplicate existing rows as `Removed` and creates `llm_enhanced` refined `Open` rows with readable evidence text plus separate API metadata.
+- `generate_docx`: creates a simple editable Word draft from project metadata, latest AUD plan, supported mapped source content, LLM-enhanced unresolved open points, and writes it through the configured storage backend.
 - `generate_aud`: runs the one-click AUD pipeline as an orchestration job, creating internal stage jobs in order and tracking run status in `aud_generation_runs`.
 
 `extract_all` progress moves across extraction stages. If some files fail and at least one file succeeds, the job ends as `completed_with_warnings`. If all attempted files fail, the job ends as `failed`.
@@ -1018,7 +1028,7 @@ Current DOCX generation scope:
 - If an AI draft is unavailable or gated off, DOCX generation falls back to rule-based source content.
 - Selected draft tables from `draft_json.included_tables` are inserted when resolvable from direct rows or evidence item IDs.
 - Selected draft images from `draft_json.included_images` are inserted when `include_images=true`; otherwise image insertion is skipped.
-- Open Points are included only when `include_open_points=true`, and only rows with status `Open` are rendered.
+- Open Points are included only when `include_open_points=true`. By default, only rows with `source_type=llm_enhanced` and status `Open` are rendered.
 - If the latest AUD plan is missing, contains only standard sections, or predates extracted FDD content, DOCX generation refreshes the deterministic AUD plan before rendering.
 - Enterprise Structure is a required carry-forward section. If detected in FDD, PPT, or other extracted source content, it is inserted after Introduction with source text, tables, and supported associated images. If not detected, a clear placeholder is inserted after Introduction.
 - Does not call an LLM.
@@ -1034,7 +1044,8 @@ Current DOCX generation scope:
 - Skips PPT images in formats `python-docx` cannot embed directly, such as WMF vector images.
 - If section content is too long, includes the first meaningful paragraphs and adds `Additional details available in source document.`
 - If no supported mapped content is available, writes `<Content not available in provided source material>`.
-- Open Points includes rows with status `Open` only.
+- Open Points includes rows with status `Open` only, and defaults to `llm_enhanced` rows so raw extracted candidates are not inserted directly.
+- If LLM Open Points refinement fails completely and `ALLOW_RAW_OPEN_POINTS_FALLBACK=true`, DOCX generation may fall back to raw extracted rows with `refinement_status=failed` when no enhanced rows exist. This logs `LLM Open Points enhancement failed; falling back to raw Open Points` and stores `{"open_points_fallback": true}` in generated document metadata.
 - Documents Referred is excluded.
 - Source Conflict Summary is appended only when `INTERNAL_DEBUG_OUTPUT=true`.
 - Unsupported source mappings are left as placeholders rather than inferred.
@@ -1305,6 +1316,11 @@ OCI_GENAI_MAX_INPUT_CHARS=200000
 OCI_GENAI_TIMEOUT_SECONDS=120
 OCI_GENAI_TEMPERATURE=1
 OCI_GENAI_MAX_OUTPUT_TOKENS=16000
+OCI_GENAI_RETRY_MAX_ATTEMPTS=4
+OCI_GENAI_RETRY_BASE_SECONDS=2
+OCI_GENAI_RETRY_MAX_SECONDS=20
+REQUIRE_LLM_ENHANCED_OPEN_POINTS=true
+ALLOW_RAW_OPEN_POINTS_FALLBACK=true
 ```
 
 The wrapper validates prompt length before calling a provider and does not log
@@ -1313,6 +1329,12 @@ system/JSON instructions before applying `OCI_GENAI_MAX_INPUT_CHARS`, so bounded
 AI jobs do not fail just because wrapper text was added after trimming. JSON
 calls strip simple markdown JSON fences, parse strictly, and fail with a
 controlled error if the model returns invalid JSON.
+
+OCI 429 throttling is treated as transient by both OCI LLM providers. The
+wrapper retries with exponential backoff using `OCI_GENAI_RETRY_MAX_ATTEMPTS`,
+`OCI_GENAI_RETRY_BASE_SECONDS`, and `OCI_GENAI_RETRY_MAX_SECONDS`. For Gemini
+Flash models with many AUD sections, increase the base/max retry seconds if
+section drafting still reports throttling warnings near the end of a run.
 
 Some OCI Generative AI models, including newer GPT-style models, only accept the
 default temperature value. Keep `OCI_GENAI_TEMPERATURE=1` for those models. The

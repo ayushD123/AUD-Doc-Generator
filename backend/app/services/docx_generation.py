@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -72,6 +73,11 @@ LOW_VALUE_SLIDE_TITLES = {
 }
 ACCEPTED_DRAFT_STATUSES = {"accepted", "approved", "reviewed"}
 OMITTED_DRAFT_STATUSES = {"excluded", "omitted", "removed"}
+OPEN_POINTS_FALLBACK_WARNING = (
+    "LLM Open Points enhancement failed; falling back to raw Open Points"
+)
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -88,6 +94,12 @@ class SectionRenderContext:
     draft_json: dict[str, Any]
     paragraphs: list[str]
     was_truncated: bool
+
+
+@dataclass(frozen=True)
+class OpenPointSelection:
+    open_points: list[OpenPoint]
+    used_fallback: bool
 
 
 def normalize_title(value: str) -> str:
@@ -218,17 +230,50 @@ def latest_aud_plan(session: Session, project_id: str) -> AUDPlan | None:
     return session.scalars(statement).first()
 
 
-def list_open_points(session: Session, project_id: str) -> list[OpenPoint]:
+def list_open_points_for_docx(
+    session: Session,
+    project_id: str,
+    settings: Settings,
+) -> OpenPointSelection:
     statement = (
         select(OpenPoint)
         .where(OpenPoint.project_id == project_id)
         .order_by(OpenPoint.created_at.asc())
     )
-    return [
+    open_points = [
         open_point
         for open_point in session.scalars(statement)
         if normalize_title(open_point.status) == "open"
     ]
+    enhanced_open_points = [
+        open_point
+        for open_point in open_points
+        if open_point.source_type == "llm_enhanced"
+    ]
+
+    if enhanced_open_points:
+        return OpenPointSelection(enhanced_open_points, used_fallback=False)
+
+    raw_open_points = [
+        open_point
+        for open_point in open_points
+        if open_point.source_type in {"raw_extracted", "fallback"}
+    ]
+
+    if not settings.REQUIRE_LLM_ENHANCED_OPEN_POINTS:
+        return OpenPointSelection(raw_open_points, used_fallback=False)
+
+    fallback_open_points = [
+        open_point
+        for open_point in raw_open_points
+        if open_point.refinement_status == "failed"
+    ]
+
+    if settings.ALLOW_RAW_OPEN_POINTS_FALLBACK and fallback_open_points:
+        logger.warning(OPEN_POINTS_FALLBACK_WARNING)
+        return OpenPointSelection(fallback_open_points, used_fallback=True)
+
+    return OpenPointSelection([], used_fallback=False)
 
 
 def list_section_drafts(session: Session, project_id: str) -> list[AUDSectionDraft]:
@@ -1473,7 +1518,11 @@ def generate_docx(
     )
     section_drafts = list_section_drafts(session, project_id)
     evidence_item_by_id = get_evidence_item_by_id(session, project_id)
-    open_points = list_open_points(session, project_id)
+    open_point_selection = list_open_points_for_docx(
+        session,
+        project_id,
+        resolved_settings,
+    )
     timestamp = utc_now().strftime("%Y%m%d-%H%M%S")
     filename_prefix = sanitize_filename_part(
         project.module_name or project.customer_name
@@ -1489,7 +1538,7 @@ def generate_docx(
             extracted_content_by_id=extracted_content_by_id,
             section_drafts=section_drafts,
             evidence_item_by_id=evidence_item_by_id,
-            open_points=open_points,
+            open_points=open_point_selection.open_points,
             storage_service=resolved_storage_service,
             temporary_dir=temporary_root,
             options=resolved_options,
@@ -1504,6 +1553,9 @@ def generate_docx(
         filename=filename,
         storage_path=storage_path,
         document_type=DOCUMENT_TYPE,
+        metadata_json=json.dumps(
+            {"open_points_fallback": open_point_selection.used_fallback}
+        ),
     )
     session.add(generated_document)
     session.commit()

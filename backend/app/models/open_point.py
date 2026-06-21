@@ -24,6 +24,20 @@ class OpenPoint(Base):
     topic: Mapped[str] = mapped_column(String(500), nullable=False)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="Open")
+    source_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="raw_extracted",
+    )
+    refinement_status: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="pending",
+    )
+    raw_source_open_point_ids_json: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
     source_file_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     source_content_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     evidence: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     OCI_COMPARTMENT_OCID: str | None = None
     OCI_CONFIG_FILE: str | None = None
     OCI_PROFILE: str | None = None
+    OCI_MULTIPART_UPLOAD_THRESHOLD_BYTES: int = 50 * 1024 * 1024
+    OCI_MULTIPART_UPLOAD_PART_SIZE_BYTES: int = 10 * 1024 * 1024
+    OCI_MULTIPART_UPLOAD_PARALLEL_WORKERS: int = 4
     OCI_QUEUE_OCID: str | None = None
     OCI_QUEUE_ENDPOINT: str | None = None
     OCI_SPEECH_COMPARTMENT_OCID: str | None = None
@@ -50,7 +53,12 @@ class Settings(BaseSettings):
     OCI_GENAI_TIMEOUT_SECONDS: int = 120
     OCI_GENAI_TEMPERATURE: float = 1
     OCI_GENAI_MAX_OUTPUT_TOKENS: int = 16000
+    OCI_GENAI_RETRY_MAX_ATTEMPTS: int = 4
+    OCI_GENAI_RETRY_BASE_SECONDS: float = 2.0
+    OCI_GENAI_RETRY_MAX_SECONDS: float = 20.0
     SECTION_EVIDENCE_MAX_CHARS: int = 30000
+    REQUIRE_LLM_ENHANCED_OPEN_POINTS: bool = True
+    ALLOW_RAW_OPEN_POINTS_FALLBACK: bool = True
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     INTERNAL_DEBUG_OUTPUT: bool = False
     BACKEND_CORS_ORIGINS: list[str] = [
@@ -67,6 +75,8 @@ class Settings(BaseSettings):
         "OCI_DOCUMENT_ENABLE_PDF",
         "OCI_DOCUMENT_ENABLE_IMAGES",
         "INTERNAL_DEBUG_OUTPUT",
+        "REQUIRE_LLM_ENHANCED_OPEN_POINTS",
+        "ALLOW_RAW_OPEN_POINTS_FALLBACK",
         mode="before",
     )
     @classmethod

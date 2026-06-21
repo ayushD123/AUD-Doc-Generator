@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
 import app.services.docx_generation as docx_generation
+from app.core.config import Settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.main import create_app
@@ -149,6 +150,8 @@ def add_project_generation_inputs(session: Session, project_id: str) -> None:
             topic="Open Item",
             question="Confirm order approval threshold.",
             status="Open",
+            source_type="llm_enhanced",
+            refinement_status="refined",
         )
     )
     session.add(
@@ -157,9 +160,20 @@ def add_project_generation_inputs(session: Session, project_id: str) -> None:
             topic="Closed Item",
             question="This resolved question should not appear.",
             status="Closed",
+            source_type="llm_enhanced",
+            refinement_status="refined",
         )
     )
     session.commit()
+
+
+def get_docx_table_text(document: Document) -> str:
+    return "\n".join(
+        cell.text
+        for table in document.tables
+        for row in table.rows
+        for cell in row.cells
+    )
 
 
 def test_generate_docx_job_creates_file_and_generated_document_record(
@@ -209,12 +223,7 @@ def test_generate_docx_job_creates_file_and_generated_document_record(
         "Generated draft for Oracle internal review. Senior consultant review required "
         "before customer sharing."
     ) in document_text
-    table_text = "\n".join(
-        cell.text
-        for table in document.tables
-        for row in table.rows
-        for cell in row.cells
-    )
+    table_text = get_docx_table_text(document)
     assert "Confirm order approval threshold." in table_text
     assert "This resolved question should not appear." not in table_text
 
@@ -228,6 +237,114 @@ def test_generate_docx_job_creates_file_and_generated_document_record(
     )
     assert download_response.status_code == 200
     assert download_response.content.startswith(b"PK")
+
+
+def test_docx_open_points_prefers_llm_enhanced_and_excludes_raw(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        session.add(
+            OpenPoint(
+                project_id=project_id,
+                topic="Raw",
+                question="Raw extracted item should not appear.",
+                status="Open",
+                source_type="raw_extracted",
+                refinement_status="pending",
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(session, project_id)
+        metadata = json.loads(generated_document.metadata_json or "{}")
+        output_path = storage_root / generated_document.storage_path
+
+    table_text = get_docx_table_text(Document(output_path))
+    assert "Confirm order approval threshold." in table_text
+    assert "Raw extracted item should not appear." not in table_text
+    assert metadata["open_points_fallback"] is False
+
+
+def test_docx_open_points_raw_fallback_requires_failed_refinement(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        session.query(OpenPoint).filter(OpenPoint.project_id == project_id).delete()
+        session.add(
+            OpenPoint(
+                project_id=project_id,
+                topic="Raw",
+                question="Confirm warehouse calendar ownership.",
+                status="Open",
+                source_type="raw_extracted",
+                refinement_status="pending",
+            )
+        )
+        session.commit()
+
+        pending_document = docx_generation.generate_docx(session, project_id)
+        pending_path = storage_root / pending_document.storage_path
+        pending_table_text = get_docx_table_text(Document(pending_path))
+
+        raw_point = session.scalar(
+            select(OpenPoint).where(OpenPoint.project_id == project_id)
+        )
+        assert raw_point is not None
+        raw_point.refinement_status = "failed"
+        session.commit()
+
+        caplog.set_level("WARNING", logger="app.services.docx_generation")
+        fallback_document = docx_generation.generate_docx(session, project_id)
+        fallback_metadata = json.loads(fallback_document.metadata_json or "{}")
+        fallback_path = storage_root / fallback_document.storage_path
+        fallback_table_text = get_docx_table_text(Document(fallback_path))
+
+        disabled_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            settings=Settings(ALLOW_RAW_OPEN_POINTS_FALLBACK=False, _env_file=None),
+        )
+        disabled_path = storage_root / disabled_document.storage_path
+
+    disabled_table_text = get_docx_table_text(Document(disabled_path))
+
+    assert "Confirm warehouse calendar ownership." not in pending_table_text
+    assert "Confirm warehouse calendar ownership." in fallback_table_text
+    assert "Confirm warehouse calendar ownership." not in disabled_table_text
+    assert fallback_metadata["open_points_fallback"] is True
+    assert (
+        "LLM Open Points enhancement failed; falling back to raw Open Points"
+        in caplog.text
+    )
+
+
+def test_open_points_table_uses_required_columns_and_table_grid(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        generated_document = docx_generation.generate_docx(session, project_id)
+        output_path = storage_root / generated_document.storage_path
+
+    document = Document(output_path)
+    open_points_table = document.tables[-1]
+    headers = [cell.text for cell in open_points_table.rows[0].cells]
+
+    assert headers == ["ID", "Topic", "Question", "Status"]
+    assert len(open_points_table.columns) == 4
+    assert open_points_table.style.name == "Table Grid"
 
 
 def test_accepted_ai_draft_is_preferred_over_rule_based_content(

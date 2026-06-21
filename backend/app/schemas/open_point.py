@@ -10,6 +10,9 @@ class OpenPointRead(BaseModel):
     topic: str
     question: str
     status: str
+    source_type: str
+    refinement_status: str
+    raw_source_open_point_ids_json: str | None
     source_file_id: str | None
     source_content_id: str | None
     evidence: str | None

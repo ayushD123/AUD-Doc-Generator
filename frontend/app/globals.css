@@ -279,6 +279,10 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.file-remove-button {
+  margin-top: 12px;
+}
+
 .project-meta,
 .metadata-grid,
 .file-meta,

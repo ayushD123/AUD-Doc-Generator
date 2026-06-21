@@ -389,6 +389,42 @@ def test_ai_plan_enhancement_failure_marks_run_failed(
         engine.dispose()
 
 
+def test_open_points_refinement_failure_warns_and_continues_when_fallback_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    engine, session_local = create_session(tmp_path)
+    calls: list[str] = []
+    processors = build_success_processors(calls)
+
+    def fail_open_points_refinement(session: Session, job: Job) -> None:
+        calls.append(job.job_type)
+        raise RuntimeError("LLM refinement failed.")
+
+    processors["refine_open_points_ai"] = fail_open_points_refinement
+    monkeypatch.setattr(
+        "app.core.config.get_settings",
+        lambda: Settings(ALLOW_RAW_OPEN_POINTS_FALLBACK=True, _env_file=None),
+    )
+
+    try:
+        with session_local() as session:
+            project = add_project(session)
+            add_uploaded_file(session, project.id, "fdd.docx", source_role="fdd")
+
+            run = run_orchestrator(session, project, processors)
+
+            assert run.status == "completed_with_warnings"
+            warnings = parse_json_list(run.warnings_json)
+            assert warnings == [
+                "LLM Open Points enhancement failed; falling back to raw Open Points"
+            ]
+            assert "generate_docx" in calls
+    finally:
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
 def test_file_level_du_failure_becomes_warning_when_extraction_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

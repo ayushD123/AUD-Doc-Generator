@@ -17,7 +17,12 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     monkeypatch.delenv("OCI_GENAI_TIMEOUT_SECONDS", raising=False)
     monkeypatch.delenv("OCI_GENAI_TEMPERATURE", raising=False)
     monkeypatch.delenv("OCI_GENAI_MAX_OUTPUT_TOKENS", raising=False)
+    monkeypatch.delenv("OCI_GENAI_RETRY_MAX_ATTEMPTS", raising=False)
+    monkeypatch.delenv("OCI_GENAI_RETRY_BASE_SECONDS", raising=False)
+    monkeypatch.delenv("OCI_GENAI_RETRY_MAX_SECONDS", raising=False)
     monkeypatch.delenv("SECTION_EVIDENCE_MAX_CHARS", raising=False)
+    monkeypatch.delenv("REQUIRE_LLM_ENHANCED_OPEN_POINTS", raising=False)
+    monkeypatch.delenv("ALLOW_RAW_OPEN_POINTS_FALLBACK", raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "none")
     monkeypatch.setenv("OCI_GENAI_MAX_INPUT_CHARS", "200000")
     monkeypatch.setenv("OCI_GENAI_TIMEOUT_SECONDS", "120")
@@ -47,7 +52,12 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     assert settings.OCI_GENAI_TIMEOUT_SECONDS == 120
     assert settings.OCI_GENAI_TEMPERATURE == 1
     assert settings.OCI_GENAI_MAX_OUTPUT_TOKENS == 16000
+    assert settings.OCI_GENAI_RETRY_MAX_ATTEMPTS == 4
+    assert settings.OCI_GENAI_RETRY_BASE_SECONDS == 2.0
+    assert settings.OCI_GENAI_RETRY_MAX_SECONDS == 20.0
     assert settings.SECTION_EVIDENCE_MAX_CHARS == 30000
+    assert settings.REQUIRE_LLM_ENHANCED_OPEN_POINTS is True
+    assert settings.ALLOW_RAW_OPEN_POINTS_FALLBACK is True
     assert settings.MAX_SPREADSHEET_ROWS_PER_SHEET == 200
 
 
@@ -75,7 +85,12 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("OCI_GENAI_TIMEOUT_SECONDS", "30")
     monkeypatch.setenv("OCI_GENAI_TEMPERATURE", "0.2")
     monkeypatch.setenv("OCI_GENAI_MAX_OUTPUT_TOKENS", "1500")
+    monkeypatch.setenv("OCI_GENAI_RETRY_MAX_ATTEMPTS", "5")
+    monkeypatch.setenv("OCI_GENAI_RETRY_BASE_SECONDS", "0.5")
+    monkeypatch.setenv("OCI_GENAI_RETRY_MAX_SECONDS", "6")
     monkeypatch.setenv("SECTION_EVIDENCE_MAX_CHARS", "5000")
+    monkeypatch.setenv("REQUIRE_LLM_ENHANCED_OPEN_POINTS", "false")
+    monkeypatch.setenv("ALLOW_RAW_OPEN_POINTS_FALLBACK", "false")
     monkeypatch.setenv("MAX_SPREADSHEET_ROWS_PER_SHEET", "25")
 
     settings = Settings(_env_file=None)
@@ -103,7 +118,12 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     assert settings.OCI_GENAI_TIMEOUT_SECONDS == 30
     assert settings.OCI_GENAI_TEMPERATURE == 0.2
     assert settings.OCI_GENAI_MAX_OUTPUT_TOKENS == 1500
+    assert settings.OCI_GENAI_RETRY_MAX_ATTEMPTS == 5
+    assert settings.OCI_GENAI_RETRY_BASE_SECONDS == 0.5
+    assert settings.OCI_GENAI_RETRY_MAX_SECONDS == 6
     assert settings.SECTION_EVIDENCE_MAX_CHARS == 5000
+    assert settings.REQUIRE_LLM_ENHANCED_OPEN_POINTS is False
+    assert settings.ALLOW_RAW_OPEN_POINTS_FALLBACK is False
     assert settings.MAX_SPREADSHEET_ROWS_PER_SHEET == 25
 
 

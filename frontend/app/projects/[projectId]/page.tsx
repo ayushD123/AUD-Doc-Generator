@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
 import {
   formatProjectDate,
@@ -14,6 +14,7 @@ import {
   createGenerateSectionDraftsAiJob,
   createGenerateAudPlanJob,
   createGenerateDocxJob,
+  deleteProjectFile,
   getAudPlan,
   getGeneratedDocumentDownloadUrl,
   getProject,
@@ -79,6 +80,46 @@ type SectionDraftJson = {
   open_point_candidates?: unknown[];
   placeholders?: unknown[];
 };
+
+type UploadedFileListItem = UploadedFile & {
+  uploadStatus?: "pending";
+};
+
+const pendingUploadIdPrefix = "pending-upload-";
+
+function getClientFileType(filename: string) {
+  const extension = filename.split(".").pop();
+  return extension && extension !== filename ? extension.toLowerCase() : null;
+}
+
+function buildPendingUploadedFile(
+  projectId: string,
+  sourceRole: SourceRole,
+  file: File,
+): UploadedFileListItem {
+  return {
+    id: `${pendingUploadIdPrefix}${crypto.randomUUID()}`,
+    project_id: projectId,
+    original_filename: file.name || "uploaded_file",
+    file_type: getClientFileType(file.name),
+    storage_path: "",
+    source_role: sourceRole,
+    created_at: new Date().toISOString(),
+    uploadStatus: "pending",
+  };
+}
+
+function isPendingUploadedFile(uploadedFile: UploadedFileListItem) {
+  return uploadedFile.uploadStatus === "pending";
+}
+
+function waitForNextPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
 
 function parseExtractedContentJson(value: string | null): ExtractedContentJson {
   if (!value) {
@@ -345,8 +386,15 @@ function buildOrderedSectionDrafts(
 
 export default function ProjectDetailPage() {
   const params = useParams<{ projectId: string }>();
+  const uploadInFlightRef = useRef(false);
   const [project, setProject] = useState<Project | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
+  const [pendingUploadedFiles, setPendingUploadedFiles] = useState<
+    UploadedFileListItem[]
+  >([]);
+  const [deletingUploadedFileIds, setDeletingUploadedFileIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [jobs, setJobs] = useState<Job[]>([]);
   const [extractedContents, setExtractedContents] = useState<ExtractedContent[]>([]);
   const [evidenceItems, setEvidenceItems] = useState<EvidenceItem[]>([]);
@@ -580,31 +628,104 @@ export default function ProjectDetailPage() {
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (uploadInFlightRef.current) {
+      setFileMessage("Upload already in progress.");
+      return;
+    }
+
     if (!selectedFile) {
       setFileMessage("Choose a file before uploading.");
       return;
     }
 
+    uploadInFlightRef.current = true;
     setIsUploading(true);
     setFileMessage(null);
 
+    const fileToUpload = selectedFile;
+    const sourceRoleToUpload = sourceRole;
+    const pendingUploadedFile = buildPendingUploadedFile(
+      params.projectId,
+      sourceRoleToUpload,
+      fileToUpload,
+    );
+
+    setPendingUploadedFiles((current) => [pendingUploadedFile, ...current]);
+    setSelectedFile(null);
+    setFileInputKey((current) => current + 1);
+    await waitForNextPaint();
+
     try {
-      await uploadProjectFile(params.projectId, sourceRole, selectedFile);
-      setSelectedFile(null);
-      setFileInputKey((current) => current + 1);
-      await refreshFiles(params.projectId);
+      const uploadedFile = await uploadProjectFile(
+        params.projectId,
+        sourceRoleToUpload,
+        fileToUpload,
+      );
+      setPendingUploadedFiles((current) =>
+        current.filter((item) => item.id !== pendingUploadedFile.id),
+      );
+      setUploadedFiles((current) => [
+        uploadedFile,
+        ...current.filter((item) => item.id !== uploadedFile.id),
+      ]);
+      void refreshFiles(params.projectId);
       void refreshSourcePriority(params.projectId);
       setFileMessage("File uploaded.");
     } catch (error) {
+      setPendingUploadedFiles((current) =>
+        current.filter((item) => item.id !== pendingUploadedFile.id),
+      );
       const detail = error instanceof Error ? error.message : "Unknown error.";
       setFileMessage(`Unable to upload file: ${detail}`);
     } finally {
+      uploadInFlightRef.current = false;
       setIsUploading(false);
     }
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     setSelectedFile(event.target.files?.[0] || null);
+  }
+
+  async function handleDeleteUploadedFile(uploadedFile: UploadedFileListItem) {
+    if (isPendingUploadedFile(uploadedFile)) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Remove ${uploadedFile.original_filename} from this project?`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingUploadedFileIds((current) => new Set(current).add(uploadedFile.id));
+    setFileMessage(null);
+
+    try {
+      await deleteProjectFile(params.projectId, uploadedFile.id);
+      setUploadedFiles((current) =>
+        current.filter((item) => item.id !== uploadedFile.id),
+      );
+      void Promise.all([
+        refreshSourcePriority(params.projectId),
+        refreshExtractedContent(params.projectId),
+        refreshEvidenceItems(params.projectId),
+        refreshSourceSummaries(params.projectId),
+        refreshOpenPoints(params.projectId),
+      ]);
+      setFileMessage("File removed.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setFileMessage(`Unable to remove file: ${detail}`);
+    } finally {
+      setDeletingUploadedFileIds((current) => {
+        const next = new Set(current);
+        next.delete(uploadedFile.id);
+        return next;
+      });
+    }
   }
 
   async function handleCreateClassifyJob() {
@@ -764,6 +885,10 @@ export default function ProjectDetailPage() {
     sectionDrafts,
     audPlanJson,
   );
+  const visibleUploadedFiles: UploadedFileListItem[] = [
+    ...pendingUploadedFiles,
+    ...uploadedFiles,
+  ];
   const evidenceGroupCounts = buildEvidenceGroupCounts(evidenceItems);
   const sourceSummaryGroups = buildSourceSummaryGroups(sourceSummaries);
   const topEvidenceItems = [...evidenceItems]
@@ -855,6 +980,7 @@ export default function ProjectDetailPage() {
                       <span>Source Role</span>
                       <select
                         value={sourceRole}
+                        disabled={isUploading}
                         onChange={(event) =>
                           setSourceRole(event.target.value as SourceRole)
                         }
@@ -872,6 +998,7 @@ export default function ProjectDetailPage() {
                       <input
                         key={fileInputKey}
                         type="file"
+                        disabled={isUploading}
                         onChange={handleFileChange}
                       />
                     </label>
@@ -880,7 +1007,7 @@ export default function ProjectDetailPage() {
                       <button
                         type="submit"
                         className="primary-button"
-                        disabled={isUploading}
+                        disabled={isUploading || !selectedFile}
                       >
                         {isUploading ? "Uploading..." : "Upload File"}
                       </button>
@@ -893,16 +1020,32 @@ export default function ProjectDetailPage() {
                     <p className="muted-text">Loading uploaded files...</p>
                   ) : null}
 
-                  {!isLoadingFiles && uploadedFiles.length === 0 ? (
+                  {!isLoadingFiles && visibleUploadedFiles.length === 0 ? (
                     <p className="muted-text">No files uploaded yet.</p>
                   ) : null}
 
                   <div className="file-list">
-                    {uploadedFiles.map((uploadedFile) => (
+                    {visibleUploadedFiles.map((uploadedFile) => (
                       <article key={uploadedFile.id} className="file-row">
                         <div>
                           <h3>{uploadedFile.original_filename}</h3>
-                          <p>{uploadedFile.storage_path}</p>
+                          <p>
+                            {isPendingUploadedFile(uploadedFile)
+                              ? "Upload in progress..."
+                              : uploadedFile.storage_path}
+                          </p>
+                          {!isPendingUploadedFile(uploadedFile) ? (
+                            <button
+                              type="button"
+                              className="secondary-button file-remove-button"
+                              disabled={deletingUploadedFileIds.has(uploadedFile.id)}
+                              onClick={() => void handleDeleteUploadedFile(uploadedFile)}
+                            >
+                              {deletingUploadedFileIds.has(uploadedFile.id)
+                                ? "Removing..."
+                                : "Remove"}
+                            </button>
+                          ) : null}
                         </div>
 
                         <dl className="file-meta">

@@ -425,8 +425,11 @@ Refine Open Points for an Oracle Application Understanding Document.
 
 Business rules:
 - Include only unresolved questions or manual actions.
+- Convert raw fragments into clear consultant/customer clarification questions.
 - Exclude items marked Closed, Resolved, Aligned, or Done.
+- Exclude items answered by FDD or the final approved AUD sample.
 - Exclude duplicates and return the cleanest wording once.
+- Do not include transcript filler.
 - Timestamp-based screenshot placeholders are Open Points only when a manual action is required.
 - FDD is the golden source. If FDD provides a clear answer, do not create an Open Point from lower-priority conflict.
 - If FDD says needs more discussion, to be confirmed, TBD, pending, or awaiting confirmation, include an Open Point.
@@ -594,7 +597,9 @@ def normalize_refinement_payload(
 
 
 def is_refined_open_point(open_point: OpenPoint) -> bool:
-    return bool(get_refinement_metadata(open_point.evidence))
+    return open_point.source_type == "llm_enhanced" or bool(
+        get_refinement_metadata(open_point.evidence)
+    )
 
 
 def build_existing_role_map(open_points: list[OpenPoint]) -> dict[str, str]:
@@ -676,6 +681,7 @@ def apply_refined_open_points(
             existing = existing_by_id.get(source_id)
             if existing is not None and existing.status != "Removed":
                 existing.status = "Removed"
+                existing.refinement_status = "refined"
 
         existing_same_question = existing_by_question.get(question_key)
         if existing_same_question is not None:
@@ -684,13 +690,21 @@ def apply_refined_open_points(
                 open_point.topic = payload["topic"]
                 open_point.question = payload["question"]
                 open_point.status = "Open"
+                open_point.source_type = "llm_enhanced"
+                open_point.refinement_status = "refined"
             else:
                 existing_same_question.status = "Removed"
+                existing_same_question.refinement_status = "refined"
                 open_point = OpenPoint(
                     project_id=project_id,
                     topic=payload["topic"],
                     question=payload["question"],
                     status="Open",
+                    source_type="llm_enhanced",
+                    refinement_status="refined",
+                    raw_source_open_point_ids_json=json.dumps(
+                        payload["source_open_point_ids"]
+                    ),
                 )
                 session.add(open_point)
         else:
@@ -699,6 +713,11 @@ def apply_refined_open_points(
                 topic=payload["topic"],
                 question=payload["question"],
                 status="Open",
+                source_type="llm_enhanced",
+                refinement_status="refined",
+                raw_source_open_point_ids_json=json.dumps(
+                    payload["source_open_point_ids"]
+                ),
             )
             session.add(open_point)
 
@@ -720,9 +739,33 @@ def apply_refined_open_points(
             },
             ensure_ascii=False,
         )
+        open_point.source_type = "llm_enhanced"
+        open_point.refinement_status = "refined"
+        open_point.raw_source_open_point_ids_json = json.dumps(
+            payload["source_open_point_ids"]
+        )
         created_or_updated.append(open_point)
 
     return created_or_updated
+
+
+def mark_open_point_refinement_failed(
+    session: Session,
+    project_id: str,
+) -> int:
+    open_points = list_existing_open_points(session, project_id)
+    marked_count = 0
+
+    for open_point in open_points:
+        if (
+            open_point.source_type in {"raw_extracted", "fallback"}
+            and open_point.refinement_status == "pending"
+        ):
+            open_point.refinement_status = "failed"
+            marked_count += 1
+
+    session.commit()
+    return marked_count
 
 
 def refine_open_points_ai(

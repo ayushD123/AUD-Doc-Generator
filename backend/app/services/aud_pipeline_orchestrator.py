@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.db.base import utc_now
 from app.models import AUDGenerationRun, GeneratedDocument, Job, Project, UploadedFile
+from app.services.docx_generation import OPEN_POINTS_FALLBACK_WARNING
+from app.services.open_points_ai_refinement import mark_open_point_refinement_failed
 
 logger = logging.getLogger(__name__)
 
@@ -296,6 +298,21 @@ class AUDPipelineOrchestrator:
             return
 
         if stage_job.status == "failed":
+            if (
+                stage == AUDPipelineStage.GENERATE_OPEN_POINTS_AI
+                and stage_job.job_type == "refine_open_points_ai"
+            ):
+                from app.core.config import get_settings
+
+                settings = get_settings()
+                if settings.ALLOW_RAW_OPEN_POINTS_FALLBACK:
+                    mark_open_point_refinement_failed(
+                        self.session,
+                        self.generation_run.project_id,
+                    )
+                    self.add_warning(OPEN_POINTS_FALLBACK_WARNING)
+                    return
+
             raise RuntimeError(stage_job.message or f"{stage_job.job_type} failed.")
 
         raise RuntimeError(

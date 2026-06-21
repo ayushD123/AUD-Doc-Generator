@@ -9,6 +9,7 @@ class GeneratedDocumentRead(BaseModel):
     filename: str
     storage_path: str
     document_type: str
+    metadata_json: str | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

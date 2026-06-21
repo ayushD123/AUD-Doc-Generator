@@ -396,6 +396,8 @@ def extract_open_points(session: Session, project_id: str) -> list[OpenPoint]:
             topic=candidate.topic,
             question=candidate.question,
             status="Open",
+            source_type="raw_extracted",
+            refinement_status="pending",
             source_file_id=candidate.source_file_id,
             source_content_id=candidate.source_content_id,
             evidence=candidate.evidence,

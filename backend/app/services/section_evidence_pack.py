@@ -61,13 +61,10 @@ def as_string_list(value: Any) -> list[str]:
     return [str(item) for item in value if str(item).strip()]
 
 
-def iter_plan_sections(plan_payload: dict[str, Any]) -> list[PlanSection]:
-    ai_plan = plan_payload.get("ai_enhanced_plan")
-    raw_sections = (
-        ai_plan.get("sections")
-        if isinstance(ai_plan, dict) and isinstance(ai_plan.get("sections"), list)
-        else plan_payload.get("sections", [])
-    )
+def normalize_plan_sections(raw_sections: Any) -> list[PlanSection]:
+    if not isinstance(raw_sections, list):
+        return []
+
     sections: list[PlanSection] = []
 
     for index, section in enumerate(raw_sections, start=1):
@@ -95,6 +92,17 @@ def iter_plan_sections(plan_payload: dict[str, Any]) -> list[PlanSection]:
         )
 
     return sections
+
+
+def iter_plan_sections(plan_payload: dict[str, Any]) -> list[PlanSection]:
+    ai_plan = plan_payload.get("ai_enhanced_plan")
+
+    if isinstance(ai_plan, dict):
+        ai_sections = normalize_plan_sections(ai_plan.get("sections"))
+        if ai_sections:
+            return ai_sections
+
+    return normalize_plan_sections(plan_payload.get("sections"))
 
 
 def parse_json_object(value: str | None) -> dict[str, Any]:

@@ -540,6 +540,52 @@ def test_enhancement_retries_once_after_missing_sections_schema(
     assert plan_payload["ai_enhanced_plan"]["sections"][0]["title"] == "Order Capture"
 
 
+def test_enhancement_falls_back_to_deterministic_sections_when_llm_omits_sections(
+    client_and_session: tuple[TestClient, sessionmaker],
+) -> None:
+    _, session_local = client_and_session
+    fake_llm = FakeAUDPlanLLMService(
+        responses=[
+            {
+                "document_strategy": {
+                    "template_source": "default_scm_template",
+                    "content_golden_source": "fdd",
+                    "default_template_required": True,
+                    "notes": ["FDD remains authoritative."],
+                }
+            },
+            {
+                "document_strategy": {
+                    "template_source": "default_scm_template",
+                    "content_golden_source": "fdd",
+                    "default_template_required": True,
+                    "notes": ["FDD remains authoritative."],
+                }
+            },
+        ]
+    )
+
+    with session_local() as session:
+        project = create_project_with_plan(session)
+        aud_plan = enhance_aud_plan_ai(
+            session,
+            project.id,
+            llm_service=fake_llm,
+            settings=Settings(_env_file=None),
+        )
+        plan_payload = json.loads(aud_plan.plan_json)
+
+    enhanced_plan = plan_payload["ai_enhanced_plan"]
+    enhanced_titles = [section["title"] for section in enhanced_plan["sections"]]
+
+    assert len(fake_llm.prompts) == 2
+    assert enhanced_titles == ["Cover Page", "Order Capture"]
+    assert (
+        "LLM omitted enhanced AUD plan sections; backend carried forward deterministic "
+        "AUD plan sections."
+    ) in enhanced_plan["warnings"]
+
+
 def test_invalid_json_handled_without_corrupting_existing_plan(
     client_and_session: tuple[TestClient, sessionmaker],
 ) -> None:

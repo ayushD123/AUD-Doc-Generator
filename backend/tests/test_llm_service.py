@@ -7,6 +7,14 @@ from app.services.llm import LLMError, LLMInputTooLongError, LLMInvalidJSONError
 from app.services.llm.json_utils import parse_json_response, strip_markdown_json_fence
 from app.services.llm.noop import NoOpLLMService
 from app.services.llm.oci_genai_classic import OCIGenAIClassicLLMService
+from app.services.llm.oci_responses import OCIResponsesLLMService
+
+
+class FakeTransientError(RuntimeError):
+    def __init__(self, message: str = "Service request limit is exceeded") -> None:
+        super().__init__(message)
+        self.status = 429
+        self.code = "429"
 
 
 def test_noop_generate_text_returns_disabled_message() -> None:
@@ -45,6 +53,35 @@ def test_parse_json_response_extracts_fenced_object_with_trailing_text() -> None
     assert parse_json_response(value) == {
         "message": "brace } inside string",
         "status": "ok",
+    }
+
+
+def test_parse_json_response_accepts_opening_fence_without_closing_fence() -> None:
+    value = '```json\n{"section_id":"section-003","draft_text":"Table of Contents"}'
+
+    assert parse_json_response(value) == {
+        "section_id": "section-003",
+        "draft_text": "Table of Contents",
+    }
+
+
+def test_parse_json_response_repairs_literal_newlines_inside_strings() -> None:
+    value = (
+        '```json\n'
+        '{\n'
+        '  "section_id": "section-007-process-list",\n'
+        '  "draft_text": "Defined orchestration processes:\n'
+        'CustomDOO_DOO_OrderFulfillmentGenericProcess_NoRSV"\n'
+        '}\n'
+        '```'
+    )
+
+    assert parse_json_response(value) == {
+        "section_id": "section-007-process-list",
+        "draft_text": (
+            "Defined orchestration processes:\n"
+            "CustomDOO_DOO_OrderFulfillmentGenericProcess_NoRSV"
+        ),
     }
 
 
@@ -223,6 +260,79 @@ def test_oci_classic_retries_with_default_temperature_when_model_rejects_custom_
 
     assert service.generate_text("hello") == '{"status":"ok"}'
     assert [detail.temperature for detail in client.chat_details] == [0.1, 1]
+
+
+def test_oci_classic_retries_transient_429_with_backoff() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.chat_details: list[SimpleNamespace] = []
+
+        def chat(self, chat_detail: SimpleNamespace) -> SimpleNamespace:
+            self.chat_details.append(chat_detail)
+            if len(self.chat_details) < 3:
+                raise FakeTransientError()
+
+            return SimpleNamespace(
+                data=SimpleNamespace(
+                    chat_response=SimpleNamespace(output_text='{"status":"ok"}')
+                )
+            )
+
+    client = FakeClient()
+    service = OCIGenAIClassicLLMService(
+        settings=Settings(
+            OCI_GENAI_MAX_INPUT_CHARS=1000,
+            OCI_GENAI_RETRY_MAX_ATTEMPTS=3,
+            OCI_GENAI_RETRY_BASE_SECONDS=0.5,
+            OCI_GENAI_RETRY_MAX_SECONDS=2,
+            _env_file=None,
+        ),
+        client=client,
+    )
+    sleeps: list[float] = []
+    service._sleep = sleeps.append
+    service._build_chat_detail = lambda **kwargs: SimpleNamespace(**kwargs)  # type: ignore[method-assign]
+
+    assert service.generate_text("hello") == '{"status":"ok"}'
+    assert len(client.chat_details) == 3
+    assert sleeps == [0.5, 1.0]
+
+
+def test_oci_responses_retries_transient_429_with_backoff() -> None:
+    class FakeResponses:
+        def __init__(self) -> None:
+            self.payloads: list[dict] = []
+
+        def create(self, **payload) -> dict:
+            self.payloads.append(payload)
+            if len(self.payloads) == 1:
+                raise FakeTransientError()
+
+            return {"output_text": '{"status":"ok"}'}
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.responses = FakeResponses()
+
+    client = FakeClient()
+    service = OCIResponsesLLMService(
+        settings=Settings(
+            OCI_GENAI_REGION="us-chicago-1",
+            OCI_GENAI_MODEL_ID="gemini-flash-2.5",
+            OCI_GENAI_MAX_INPUT_CHARS=1000,
+            OCI_GENAI_RETRY_MAX_ATTEMPTS=2,
+            OCI_GENAI_RETRY_BASE_SECONDS=0.25,
+            OCI_GENAI_RETRY_MAX_SECONDS=1,
+            _env_file=None,
+        ),
+        client=client,
+    )
+    sleeps: list[float] = []
+    service._sleep = sleeps.append
+
+    assert service.generate_text("hello") == '{"status":"ok"}'
+    assert len(client.responses.payloads) == 2
+    assert sleeps == [0.25]
 
 
 def test_oci_classic_reports_output_token_limit_when_finish_reason_is_length() -> None:

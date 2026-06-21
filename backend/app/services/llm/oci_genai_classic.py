@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from time import sleep
 from typing import Any
 
 from app.core.config import Settings, get_settings
@@ -6,6 +7,9 @@ from app.services.llm.base import (
     LLMConfigurationError,
     LLMError,
     LLMService,
+    is_retryable_llm_error,
+    positive_attempt_count,
+    retry_delay_seconds,
     validate_prompt_length,
 )
 from app.services.llm.json_utils import parse_json_response
@@ -22,6 +26,7 @@ class OCIGenAIClassicLLMService(LLMService):
     ) -> None:
         self.settings = settings or get_settings()
         self.client = client or self.build_client()
+        self._sleep = sleep
 
     def build_client(self) -> Any:
         self._require_setting("OCI_GENAI_REGION", self.settings.OCI_GENAI_REGION)
@@ -78,23 +83,11 @@ class OCIGenAIClassicLLMService(LLMService):
             max_input_chars=self.settings.OCI_GENAI_MAX_INPUT_CHARS,
         )
 
-        chat_detail = self._build_chat_detail(
+        response = self._chat_with_retry(
             prompt=prompt,
             system_prompt=system_prompt,
             temperature=temperature,
         )
-        try:
-            response = self.client.chat(chat_detail)
-        except Exception as error:
-            if not self._is_unsupported_temperature_error(error):
-                raise
-
-            chat_detail = self._build_chat_detail(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=1,
-            )
-            response = self.client.chat(chat_detail)
 
         return self._extract_chat_text(response)
 
@@ -111,6 +104,48 @@ class OCIGenAIClassicLLMService(LLMService):
         return parse_json_response(
             self.generate_text(prompt=prompt, system_prompt=json_system_prompt)
         )
+
+    def _chat_with_retry(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str | None,
+        temperature: float | None,
+    ) -> Any:
+        attempts = positive_attempt_count(self.settings.OCI_GENAI_RETRY_MAX_ATTEMPTS)
+        effective_temperature = temperature
+        attempt_index = 0
+
+        while attempt_index < attempts:
+            chat_detail = self._build_chat_detail(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=effective_temperature,
+            )
+            try:
+                return self.client.chat(chat_detail)
+            except Exception as error:
+                if (
+                    self._is_unsupported_temperature_error(error)
+                    and effective_temperature != 1
+                ):
+                    effective_temperature = 1
+                    continue
+
+                is_last_attempt = attempt_index >= attempts - 1
+                if is_last_attempt or not is_retryable_llm_error(error):
+                    raise
+
+                self._sleep(
+                    retry_delay_seconds(
+                        attempt_index=attempt_index,
+                        base_seconds=self.settings.OCI_GENAI_RETRY_BASE_SECONDS,
+                        max_seconds=self.settings.OCI_GENAI_RETRY_MAX_SECONDS,
+                    )
+                )
+                attempt_index += 1
+
+        raise LLMError("OCI Generative AI classic API retry loop ended unexpectedly.")
 
     def _build_chat_detail(
         self,

@@ -28,6 +28,13 @@ EXPECTED_CONTENT_TYPES = {
     "image_supported",
 }
 CONTENT_PRIORITIES = {"fdd", "ppt", "transcript", "config", "mixed"}
+CONTENT_PRIORITY_BY_SOURCE_ROLE = {
+    "fdd": "fdd",
+    "kt_ppt": "ppt",
+    "kt_transcript": "transcript",
+    "kt_session": "transcript",
+    "config_workbook": "config",
+}
 MISSING_INFO_HANDLING_VALUES = {"omit", "placeholder", "open_point", "blank"}
 CONFIDENCE_VALUES = {"high", "medium", "low"}
 JSON_SCHEMA_MARKER_KEYS = {"$schema", "additionalProperties", "properties", "required"}
@@ -62,6 +69,10 @@ AUD_PLAN_SCHEMA_RETRY_SYSTEM_PROMPT = (
     "top-level document_strategy and sections. The sections value must be an "
     "array of section objects. Do not return schema definitions, examples, "
     "section maps, markdown, prose, or the deterministic_aud_plan input object."
+)
+AI_PLAN_SECTIONS_FALLBACK_WARNING = (
+    "LLM omitted enhanced AUD plan sections; backend carried forward deterministic "
+    "AUD plan sections."
 )
 AUD_PLAN_WRAPPER_KEYS = (
     "ai_enhanced_plan",
@@ -483,6 +494,95 @@ def validate_and_normalize_ai_plan(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def deterministic_section_to_enhanced_section(
+    section: dict[str, Any],
+    index: int,
+) -> dict[str, Any] | None:
+    title = str(section.get("title") or "").strip()
+    if not title or normalize_key(title) == "documents-referred":
+        return None
+
+    source_roles = normalize_string_list(
+        section.get("source_roles") or section.get("source_role_basis")
+    )
+    source_role_basis = str(section.get("source_role_basis") or "").lower()
+    content_priority = CONTENT_PRIORITY_BY_SOURCE_ROLE.get(source_role_basis, "mixed")
+
+    return {
+        "section_id": str(
+            section.get("section_id")
+            or f"fallback-section-{index:03d}-{normalize_key(title) or 'untitled'}"
+        ),
+        "title": title,
+        "include_in_aud": normalize_bool(section.get("include_in_aud", True)),
+        "reason": (
+            "Carried forward from deterministic AUD plan because AI enhancement "
+            "omitted sections."
+        ),
+        "source_roles": source_roles,
+        "source_summary_ids": normalize_string_list(section.get("source_summary_ids")),
+        "evidence_item_ids": normalize_string_list(section.get("evidence_item_ids")),
+        "content_priority": content_priority,
+        "expected_content_type": "narrative",
+        "confidence": str(section.get("confidence") or "medium").lower()
+        if str(section.get("confidence") or "medium").lower() in CONFIDENCE_VALUES
+        else "medium",
+        "missing_info_handling": "placeholder",
+    }
+
+
+def build_fallback_enhanced_plan(
+    deterministic_plan: dict[str, Any],
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = payload or {}
+    document_strategy = payload.get("document_strategy")
+    if not isinstance(document_strategy, dict):
+        document_strategy = build_default_document_strategy(deterministic_plan)
+
+    sections: list[dict[str, Any]] = []
+    for index, section in enumerate(
+        ensure_list(deterministic_plan.get("sections")),
+        start=1,
+    ):
+        if not isinstance(section, dict):
+            continue
+
+        fallback_section = deterministic_section_to_enhanced_section(section, index)
+        if fallback_section is not None:
+            sections.append(fallback_section)
+
+    if not sections:
+        raise LLMInvalidJSONError(
+            "Enhanced AUD plan missing sections list and deterministic plan has no "
+            "sections to carry forward."
+        )
+
+    warnings = normalize_string_list(payload.get("warnings"))
+    warnings.append(AI_PLAN_SECTIONS_FALLBACK_WARNING)
+
+    return {
+        "document_strategy": {
+            "template_source": str(document_strategy.get("template_source") or ""),
+            "content_golden_source": str(
+                document_strategy.get("content_golden_source") or ""
+            ),
+            "default_template_required": normalize_bool(
+                document_strategy.get(
+                    "default_template_required",
+                    deterministic_plan.get("default_template_required", False),
+                )
+            ),
+            "notes": normalize_string_list(document_strategy.get("notes")),
+        },
+        "sections": sections,
+        "image_strategy": ensure_list(payload.get("image_strategy")),
+        "table_strategy": ensure_list(payload.get("table_strategy")),
+        "open_point_candidates": ensure_list(payload.get("open_point_candidates")),
+        "warnings": warnings,
+    }
+
+
 def unwrap_ai_plan_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if has_direct_ai_plan_sections(payload):
         return payload
@@ -611,9 +711,12 @@ def build_default_document_strategy(payload: dict[str, Any]) -> dict[str, Any]:
 def generate_validated_enhanced_plan(
     llm_service: LLMService,
     prompt: str,
+    deterministic_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     first_error: LLMInvalidJSONError | None = None
     last_error: LLMInvalidJSONError | None = None
+    fallback_payload: dict[str, Any] | None = None
+    saw_missing_sections = False
     retry_system_prompt = AUD_PLAN_SCHEMA_RETRY_SYSTEM_PROMPT
 
     for attempt_index in range(2):
@@ -637,8 +740,14 @@ def generate_validated_enhanced_plan(
             if first_error is None:
                 first_error = error
             last_error = error
+            if "missing sections list" in str(error):
+                saw_missing_sections = True
+                fallback_payload = enhanced_payload
             retry_system_prompt = AUD_PLAN_SCHEMA_RETRY_SYSTEM_PROMPT
             continue
+
+    if saw_missing_sections and deterministic_plan is not None:
+        return build_fallback_enhanced_plan(deterministic_plan, fallback_payload)
 
     assert last_error is not None
     if first_error is not last_error:
@@ -675,6 +784,7 @@ def enhance_aud_plan_ai(
     normalized_enhanced_plan = generate_validated_enhanced_plan(
         resolved_llm_service,
         prompt,
+        deterministic_plan=deterministic_plan,
     )
     updated_plan = dict(deterministic_plan)
     updated_plan["ai_enhanced_plan"] = normalized_enhanced_plan

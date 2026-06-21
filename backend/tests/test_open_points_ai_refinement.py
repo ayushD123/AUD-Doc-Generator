@@ -16,6 +16,7 @@ from app.models import (
 from app.services.open_points_ai_refinement import (
     OpenPointCandidateContext,
     build_refine_open_points_prompt,
+    mark_open_point_refinement_failed,
     refine_open_points_ai,
 )
 
@@ -267,6 +268,8 @@ def test_fdd_needs_more_discussion_is_included(tmp_path: Path) -> None:
         assert len(result.open_points) == 1
         assert len(open_points) == 1
         assert open_points[0].status == "Open"
+        assert open_points[0].source_type == "llm_enhanced"
+        assert open_points[0].refinement_status == "refined"
         assert open_points[0].question == "Confirm pricing approval flow with business."
         evidence_payload = json.loads(open_points[0].evidence or "{}")
         assert evidence_payload["refinement_job_type"] == "refine_open_points_ai"
@@ -355,9 +358,54 @@ def test_duplicate_refinement_marks_source_removed_and_creates_one_refined_item(
         ]
         assert existing.status == "Removed"
         assert [point.status for point in all_open_points] == ["Removed", "Open"]
+        assert all_open_points[0].refinement_status == "refined"
+        assert all_open_points[1].source_type == "llm_enhanced"
+        assert all_open_points[1].refinement_status == "refined"
+        assert json.loads(all_open_points[1].raw_source_open_point_ids_json or "[]") == [
+            existing.id
+        ]
         assert all_open_points[1].question == "Confirm shipping cutover timing."
         refined_evidence = json.loads(all_open_points[1].evidence or "{}")
         assert refined_evidence["evidence_text"] == "Original deterministic extraction."
+    finally:
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+
+
+def test_mark_open_point_refinement_failed_marks_only_pending_raw_rows(
+    tmp_path: Path,
+) -> None:
+    session_local, engine = make_session(tmp_path)
+
+    try:
+        with session_local() as session:
+            project = create_project(session)
+            raw_pending = OpenPoint(
+                project_id=project.id,
+                topic="Raw",
+                question="Confirm raw pending item.",
+                status="Open",
+                source_type="raw_extracted",
+                refinement_status="pending",
+            )
+            enhanced = OpenPoint(
+                project_id=project.id,
+                topic="Enhanced",
+                question="Confirm enhanced item.",
+                status="Open",
+                source_type="llm_enhanced",
+                refinement_status="refined",
+            )
+            session.add_all([raw_pending, enhanced])
+            session.commit()
+
+            marked_count = mark_open_point_refinement_failed(session, project.id)
+            session.refresh(raw_pending)
+            session.refresh(enhanced)
+
+        assert marked_count == 1
+        assert raw_pending.refinement_status == "failed"
+        assert enhanced.refinement_status == "refined"
     finally:
         Base.metadata.drop_all(bind=engine)
         engine.dispose()

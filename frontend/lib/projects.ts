@@ -256,6 +256,20 @@ export function listProjectFiles(projectId: string) {
   return requestJson<UploadedFile[]>(`/projects/${projectId}/files`);
 }
 
+export async function deleteProjectFile(projectId: string, fileId: string) {
+  const response = await fetch(`${getApiBaseUrl()}/projects/${projectId}/files/${fileId}`, {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorBody = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new Error(errorBody?.detail || `Request failed with HTTP ${response.status}.`);
+  }
+}
+
 export function listProjectJobs(projectId: string) {
   return requestJson<Job[]>(`/projects/${projectId}/jobs`);
 }

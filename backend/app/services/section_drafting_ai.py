@@ -20,6 +20,14 @@ from app.services.llm.base import get_prompt_body_budget
 from app.services.section_evidence_pack import build_section_evidence_packs
 
 CONFIDENCE_VALUES = {"high", "medium", "low"}
+SECTION_DRAFT_OUTPUT_CHAR_LIMIT = 1400
+SECTION_DRAFT_JSON_RETRY_SYSTEM_PROMPT = (
+    "The previous section draft response was not valid complete JSON. "
+    "Return exactly one complete JSON object for aud_section_draft. "
+    f"Keep draft_text under {SECTION_DRAFT_OUTPUT_CHAR_LIMIT} characters. "
+    "Use plain paragraphs only, no markdown fences, no markdown bullets, and no prose "
+    "before or after the JSON object."
+)
 LIST_FIELDS = {
     "used_evidence_item_ids",
     "included_tables",
@@ -181,6 +189,8 @@ Business rules:
 - Use professional AUD language with a customer-facing but internally reviewable tone.
 - If the section has no supported evidence, produce a clear placeholder and low confidence.
 - Write Word-document-ready prose in draft_text.
+- Keep draft_text under {SECTION_DRAFT_OUTPUT_CHAR_LIMIT} characters.
+- Use plain paragraphs only. Do not use markdown headings, markdown bullets, bold markers, tables, or code fences.
 - Do not include citations inside draft_text.
 - Preserve used evidence item IDs in used_evidence_item_ids.
 
@@ -232,6 +242,8 @@ def normalize_section_draft_payload(
     if not draft_text:
         draft_text = "<Content not available in provided source material>"
         confidence = "low"
+    elif len(draft_text) > SECTION_DRAFT_OUTPUT_CHAR_LIMIT:
+        draft_text = f"{draft_text[:SECTION_DRAFT_OUTPUT_CHAR_LIMIT].rstrip()}..."
 
     if confidence not in CONFIDENCE_VALUES:
         confidence = "medium"
@@ -257,6 +269,23 @@ def normalize_section_draft_payload(
         normalized["placeholders"] = [draft_text]
 
     return normalized
+
+
+def generate_section_draft_payload(
+    llm_service: LLMService,
+    prompt: str,
+) -> dict:
+    try:
+        return llm_service.generate_json(
+            prompt,
+            schema_name="aud_section_draft",
+        )
+    except LLMInvalidJSONError:
+        return llm_service.generate_json(
+            prompt,
+            system_prompt=SECTION_DRAFT_JSON_RETRY_SYSTEM_PROMPT,
+            schema_name="aud_section_draft",
+        )
 
 
 def upsert_section_draft(
@@ -351,6 +380,8 @@ def insert_open_point_candidates(
             topic=candidate["topic"],
             question=candidate["question"],
             status="Open",
+            source_type="raw_extracted",
+            refinement_status="pending",
             evidence=candidate["evidence"],
         )
         session.add(open_point)
@@ -381,10 +412,7 @@ def generate_section_drafts_ai(
         try:
             pack_payload = parse_pack_json(pack)
             prompt = build_section_draft_prompt(pack_payload, settings=resolved_settings)
-            payload = resolved_llm_service.generate_json(
-                prompt,
-                schema_name="aud_section_draft",
-            )
+            payload = generate_section_draft_payload(resolved_llm_service, prompt)
             normalized_payload = normalize_section_draft_payload(payload, pack_payload)
             draft = upsert_section_draft(session, project_id, normalized_payload)
             insert_open_point_candidates(
