@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+import ClickSpark from "@/components/ClickSpark";
+import ThemeToggle from "@/components/ThemeToggle";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -13,7 +15,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ClickSpark sparkColor="#38bdf8" sparkRadius={22} sparkCount={10}>
+          <ThemeToggle />
+          {children}
+        </ClickSpark>
+      </body>
     </html>
   );
 }

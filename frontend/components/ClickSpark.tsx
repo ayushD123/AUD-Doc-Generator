@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useCallback, useEffect, useRef } from "react";
+import { MouseEvent, ReactNode, useCallback, useEffect, useRef } from "react";
 
 type Spark = {
   x: number;
@@ -37,15 +37,11 @@ export default function ClickSpark({
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const parent = canvas.parentElement;
-    if (!parent) return;
-
     let resizeTimeout: ReturnType<typeof setTimeout>;
 
     const resizeCanvas = () => {
-      const { width, height } = parent.getBoundingClientRect();
-      const nextWidth = Math.max(1, Math.floor(width));
-      const nextHeight = Math.max(1, Math.floor(height));
+      const nextWidth = Math.max(1, Math.floor(window.innerWidth));
+      const nextHeight = Math.max(1, Math.floor(window.innerHeight));
 
       if (canvas.width !== nextWidth || canvas.height !== nextHeight) {
         canvas.width = nextWidth;
@@ -58,12 +54,11 @@ export default function ClickSpark({
       resizeTimeout = setTimeout(resizeCanvas, 100);
     };
 
-    const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(parent);
+    window.addEventListener("resize", handleResize);
     resizeCanvas();
 
     return () => {
-      resizeObserver.disconnect();
+      window.removeEventListener("resize", handleResize);
       clearTimeout(resizeTimeout);
     };
   }, []);
@@ -131,7 +126,7 @@ export default function ClickSpark({
     };
   }, [duration, easeFunc, extraScale, sparkColor, sparkRadius, sparkSize]);
 
-  function handleClick(event: React.MouseEvent<HTMLDivElement>) {
+  function handleClick(event: MouseEvent<HTMLDivElement>) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
 
+import BorderGlow from "@/components/BorderGlow";
 import {
   createProject,
   formatProjectDate,
@@ -86,72 +87,78 @@ export default function Home() {
           <p className="subtitle">Internal Oracle AUD generation workspace</p>
         </header>
 
-        <section className="panel" aria-labelledby="create-project-title">
-          <div className="section-heading">
-            <h2 id="create-project-title">Create Project</h2>
-          </div>
-
-          <form className="project-form" onSubmit={handleSubmit}>
-            <label>
-              <span>Customer Name</span>
-              <input
-                value={form.customer_name}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    customer_name: event.target.value,
-                  }))
-                }
-              />
-            </label>
-
-            <label>
-              <span>Module Name</span>
-              <input
-                value={form.module_name}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    module_name: event.target.value,
-                  }))
-                }
-              />
-            </label>
-
-            <label>
-              <span>Author Name</span>
-              <input
-                value={form.name}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    name: event.target.value,
-                  }))
-                }
-              />
-            </label>
-
-            <label>
-              <span>Email Id</span>
-              <input
-                type="email"
-                value={form.email_id}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    email_id: event.target.value,
-                  }))
-                }
-              />
-            </label>
-
-            <div className="form-actions">
-              <button type="submit" className="primary-button" disabled={isSubmitting}>
-                {isSubmitting ? "Creating..." : "Create Project"}
-              </button>
+        <BorderGlow animated className="panel-glow">
+          <section className="panel" aria-labelledby="create-project-title">
+            <div className="section-heading">
+              <h2 id="create-project-title">Create Project</h2>
             </div>
-          </form>
-        </section>
+
+            <form className="project-form" onSubmit={handleSubmit}>
+              <label>
+                <span>Customer Name</span>
+                <input
+                  value={form.customer_name}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      customer_name: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Module Name</span>
+                <input
+                  value={form.module_name}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      module_name: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Author Name</span>
+                <input
+                  value={form.name}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      name: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <label>
+                <span>Email Id</span>
+                <input
+                  type="email"
+                  value={form.email_id}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      email_id: event.target.value,
+                    }))
+                  }
+                />
+              </label>
+
+              <div className="form-actions">
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={isSubmitting}
+                >
+                  {isSubmitting ? "Creating..." : "Create Project"}
+                </button>
+              </div>
+            </form>
+          </section>
+        </BorderGlow>
 
         {message ? <p className="status-message">{message}</p> : null}
 
@@ -171,31 +178,34 @@ export default function Home() {
 
           <div className="project-list">
             {projects.map((project) => (
-              <Link
+              <BorderGlow
                 key={project.id}
-                href={`/projects/${project.id}`}
-                className="project-row"
+                className="row-glow"
+                glowRadius={18}
+                glowIntensity={0.65}
               >
-                <div>
-                  <h3>{project.customer_name || "Unnamed customer"}</h3>
-                  <p>{project.module_name || "No module selected"}</p>
-                </div>
+                <Link href={`/projects/${project.id}`} className="project-row">
+                  <div>
+                    <h3>{project.customer_name || "Unnamed customer"}</h3>
+                    <p>{project.module_name || "No module selected"}</p>
+                  </div>
 
-                <dl className="project-meta">
-                  <div>
-                    <dt>Status</dt>
-                    <dd>{project.status}</dd>
-                  </div>
-                  <div>
-                    <dt>Author Name</dt>
-                    <dd>{project.name || "Not available"}</dd>
-                  </div>
-                  <div>
-                    <dt>Created</dt>
-                    <dd>{formatProjectDate(project.created_at)}</dd>
-                  </div>
-                </dl>
-              </Link>
+                  <dl className="project-meta">
+                    <div>
+                      <dt>Status</dt>
+                      <dd>{project.status}</dd>
+                    </div>
+                    <div>
+                      <dt>Author Name</dt>
+                      <dd>{project.name || "Not available"}</dd>
+                    </div>
+                    <div>
+                      <dt>Created</dt>
+                      <dd>{formatProjectDate(project.created_at)}</dd>
+                    </div>
+                  </dl>
+                </Link>
+              </BorderGlow>
             ))}
           </div>
         </section>

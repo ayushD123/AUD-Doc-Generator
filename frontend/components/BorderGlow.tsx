@@ -1,6 +1,13 @@
 "use client";
 
-import { CSSProperties, ReactNode, useCallback, useEffect, useRef } from "react";
+import {
+  CSSProperties,
+  PointerEvent,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+} from "react";
 
 type BorderGlowProps = {
   children: ReactNode;
@@ -172,7 +179,7 @@ export default function BorderGlow({
   );
 
   const handlePointerMove = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
+    (event: PointerEvent<HTMLDivElement>) => {
       const card = cardRef.current;
       if (!card) return;
 
