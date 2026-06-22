@@ -15,6 +15,7 @@ import {
   createGenerateAudPlanJob,
   createGenerateDocxJob,
   deleteProjectFile,
+  getAudGenerationStatus,
   getAudPlan,
   getGeneratedDocumentDownloadUrl,
   getProject,
@@ -29,7 +30,9 @@ import {
   listSectionDrafts,
   sourceRoleLabels,
   sourceRoles,
+  startAudGeneration,
   uploadProjectFile,
+  type AUDGenerationStatus,
   type AUDPlan,
   type AUDPlanJson,
   type AUDSectionDraft,
@@ -384,9 +387,33 @@ function buildOrderedSectionDrafts(
   return ordered.filter((group) => group.drafts.length > 0);
 }
 
+function isAudGenerationTerminal(status: string | null | undefined) {
+  return (
+    status === "completed" ||
+    status === "completed_with_warnings" ||
+    status === "failed"
+  );
+}
+
+function isAudGenerationSuccess(status: string | null | undefined) {
+  return status === "completed" || status === "completed_with_warnings";
+}
+
+function formatStageLabel(value: string | null | undefined) {
+  if (!value) {
+    return "Not started";
+  }
+
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 export default function ProjectDetailPage() {
   const params = useParams<{ projectId: string }>();
   const uploadInFlightRef = useRef(false);
+  const handledTerminalGenerationRef = useRef<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [pendingUploadedFiles, setPendingUploadedFiles] = useState<
@@ -402,6 +429,8 @@ export default function ProjectDetailPage() {
   const [sectionDrafts, setSectionDrafts] = useState<AUDSectionDraft[]>([]);
   const [openPoints, setOpenPoints] = useState<OpenPoint[]>([]);
   const [generatedDocuments, setGeneratedDocuments] = useState<GeneratedDocument[]>([]);
+  const [audGenerationStatus, setAudGenerationStatus] =
+    useState<AUDGenerationStatus | null>(null);
   const [audPlan, setAudPlan] = useState<AUDPlan | null>(null);
   const [sourcePriorityReport, setSourcePriorityReport] =
     useState<SourcePriorityReport | null>(null);
@@ -417,6 +446,8 @@ export default function ProjectDetailPage() {
   const [isLoadingSectionDrafts, setIsLoadingSectionDrafts] = useState(true);
   const [isLoadingOpenPoints, setIsLoadingOpenPoints] = useState(true);
   const [isLoadingGeneratedDocuments, setIsLoadingGeneratedDocuments] = useState(true);
+  const [isLoadingAudGenerationStatus, setIsLoadingAudGenerationStatus] =
+    useState(true);
   const [isLoadingAudPlan, setIsLoadingAudPlan] = useState(true);
   const [isLoadingSourcePriority, setIsLoadingSourcePriority] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -430,6 +461,7 @@ export default function ProjectDetailPage() {
     useState(false);
   const [isCreatingSectionDraftsJob, setIsCreatingSectionDraftsJob] =
     useState(false);
+  const [isStartingAudGeneration, setIsStartingAudGeneration] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(
     {},
   );
@@ -452,6 +484,9 @@ export default function ProjectDetailPage() {
   const [generatedDocumentsMessage, setGeneratedDocumentsMessage] = useState<
     string | null
   >(null);
+  const [audGenerationMessage, setAudGenerationMessage] = useState<string | null>(
+    null,
+  );
   const [audPlanMessage, setAudPlanMessage] = useState<string | null>(null);
   const [sourcePriorityMessage, setSourcePriorityMessage] = useState<string | null>(
     null,
@@ -569,6 +604,19 @@ export default function ProjectDetailPage() {
     }
   }
 
+  async function refreshAudGenerationStatus(projectId: string) {
+    setIsLoadingAudGenerationStatus(true);
+
+    try {
+      setAudGenerationStatus(await getAudGenerationStatus(projectId));
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setAudGenerationMessage(`Unable to load AUD generation status: ${detail}`);
+    } finally {
+      setIsLoadingAudGenerationStatus(false);
+    }
+  }
+
   async function refreshAudPlan(projectId: string) {
     setIsLoadingAudPlan(true);
     setAudPlanMessage(null);
@@ -621,9 +669,54 @@ export default function ProjectDetailPage() {
     void refreshSectionDrafts(params.projectId);
     void refreshOpenPoints(params.projectId);
     void refreshGeneratedDocuments(params.projectId);
+    void refreshAudGenerationStatus(params.projectId);
     void refreshAudPlan(params.projectId);
     void refreshSourcePriority(params.projectId);
   }, [params.projectId]);
+
+  useEffect(() => {
+    if (
+      !audGenerationStatus ||
+      isAudGenerationTerminal(audGenerationStatus.status)
+    ) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void refreshAudGenerationStatus(params.projectId);
+    }, 4000);
+
+    return () => window.clearInterval(intervalId);
+  }, [audGenerationStatus?.job_id, audGenerationStatus?.status, params.projectId]);
+
+  useEffect(() => {
+    if (!audGenerationStatus || !isAudGenerationTerminal(audGenerationStatus.status)) {
+      return;
+    }
+
+    const handledKey = `${audGenerationStatus.job_id}:${audGenerationStatus.status}`;
+    if (handledTerminalGenerationRef.current === handledKey) {
+      return;
+    }
+
+    handledTerminalGenerationRef.current = handledKey;
+
+    if (isAudGenerationSuccess(audGenerationStatus.status)) {
+      setAudGenerationMessage("Final AUD is ready");
+      void Promise.all([
+        refreshGeneratedDocuments(params.projectId),
+        refreshJobs(params.projectId),
+        refreshAudPlan(params.projectId),
+        refreshOpenPoints(params.projectId),
+        refreshEvidenceItems(params.projectId),
+        refreshSourceSummaries(params.projectId),
+        refreshSectionDrafts(params.projectId),
+      ]);
+    } else if (audGenerationStatus.status === "failed") {
+      setAudGenerationMessage("AUD generation failed.");
+      void refreshJobs(params.projectId);
+    }
+  }, [audGenerationStatus, params.projectId]);
 
   async function handleUpload(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -725,6 +818,37 @@ export default function ProjectDetailPage() {
         next.delete(uploadedFile.id);
         return next;
       });
+    }
+  }
+
+  async function handleGenerateAud() {
+    setIsStartingAudGeneration(true);
+    setAudGenerationMessage(null);
+    handledTerminalGenerationRef.current = null;
+
+    try {
+      const generationStart = await startAudGeneration(params.projectId);
+      setAudGenerationStatus({
+        job_id: generationStart.job_id,
+        status: generationStart.status,
+        current_stage: null,
+        completed_stages: [],
+        failed_stage: null,
+        warnings: [],
+        final_document_id: null,
+        final_document_url: null,
+        error: null,
+      });
+      setAudGenerationMessage(generationStart.message);
+      await Promise.all([
+        refreshAudGenerationStatus(params.projectId),
+        refreshJobs(params.projectId),
+      ]);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setAudGenerationMessage(`Unable to start AUD generation: ${detail}`);
+    } finally {
+      setIsStartingAudGeneration(false);
     }
   }
 
@@ -891,6 +1015,35 @@ export default function ProjectDetailPage() {
   ];
   const evidenceGroupCounts = buildEvidenceGroupCounts(evidenceItems);
   const sourceSummaryGroups = buildSourceSummaryGroups(sourceSummaries);
+  const isAudGenerationRunning =
+    !!audGenerationStatus && !isAudGenerationTerminal(audGenerationStatus.status);
+  const isGenerateAudDisabled = isStartingAudGeneration || isAudGenerationRunning;
+  const orderedGeneratedDocuments = [...generatedDocuments].sort((left, right) => {
+    const finalDocumentId = audGenerationStatus?.final_document_id;
+
+    if (finalDocumentId) {
+      if (left.id === finalDocumentId) {
+        return -1;
+      }
+
+      if (right.id === finalDocumentId) {
+        return 1;
+      }
+    }
+
+    return (right.created_at || "").localeCompare(left.created_at || "");
+  });
+  const finalGeneratedDocument =
+    (audGenerationStatus?.final_document_id
+      ? orderedGeneratedDocuments.find(
+          (document) => document.id === audGenerationStatus.final_document_id,
+        )
+      : null) ??
+    orderedGeneratedDocuments.find(
+      (document) => document.document_type === "aud_docx",
+    ) ??
+    orderedGeneratedDocuments[0] ??
+    null;
   const topEvidenceItems = [...evidenceItems]
     .sort((left, right) => {
       if (right.priority !== left.priority) {
@@ -928,6 +1081,155 @@ export default function ProjectDetailPage() {
               <h1 id="project-title">{project.customer_name || "Unnamed customer"}</h1>
               <p className="subtitle">{project.module_name || "No module selected"}</p>
             </header>
+
+            <section className="panel final-aud-panel" aria-labelledby="final-aud-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="final-aud-title">Final Generated AUD DOCX</h2>
+                  <p className="muted-text">Download the latest generated AUD document.</p>
+                </div>
+              </div>
+
+              <div className="panel-content">
+                {isAudGenerationSuccess(audGenerationStatus?.status) ? (
+                  <p className="status-message status-success">Final AUD is ready</p>
+                ) : null}
+
+                {isLoadingGeneratedDocuments ? (
+                  <p className="muted-text">Loading generated documents...</p>
+                ) : null}
+
+                {!isLoadingGeneratedDocuments && finalGeneratedDocument ? (
+                  <article className="generated-document-row final-document-row">
+                    <div>
+                      <h3>{finalGeneratedDocument.filename}</h3>
+                      <p>{finalGeneratedDocument.document_type}</p>
+                    </div>
+
+                    <dl className="generated-document-meta">
+                      <div>
+                        <dt>Created</dt>
+                        <dd>{formatProjectDate(finalGeneratedDocument.created_at)}</dd>
+                      </div>
+                      <div>
+                        <dt>Download</dt>
+                        <dd>
+                          <a
+                            className="download-link"
+                            href={getGeneratedDocumentDownloadUrl(
+                              params.projectId,
+                              finalGeneratedDocument.id,
+                            )}
+                          >
+                            Download DOCX
+                          </a>
+                        </dd>
+                      </div>
+                    </dl>
+                  </article>
+                ) : null}
+
+                {!isLoadingGeneratedDocuments && !finalGeneratedDocument ? (
+                  <p className="muted-text">No final AUD generated yet.</p>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="panel" aria-labelledby="aud-generation-title">
+              <div className="section-heading">
+                <div>
+                  <h2 id="aud-generation-title">AUD Generation</h2>
+                  <p className="muted-text">
+                    Start the end-to-end AUD pipeline after project files are uploaded.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  className="primary-button generate-aud-button"
+                  onClick={handleGenerateAud}
+                  disabled={isGenerateAudDisabled}
+                >
+                  {isGenerateAudDisabled ? "Generating..." : "Generate AUD"}
+                </button>
+              </div>
+
+              <div className="panel-content">
+                {audGenerationMessage ? (
+                  <p
+                    className={
+                      audGenerationStatus?.status === "failed"
+                        ? "status-message status-error"
+                        : "status-message"
+                    }
+                  >
+                    {audGenerationMessage}
+                  </p>
+                ) : null}
+
+                {isLoadingAudGenerationStatus ? (
+                  <p className="muted-text">Loading AUD generation status...</p>
+                ) : null}
+
+                {!isLoadingAudGenerationStatus && !audGenerationStatus ? (
+                  <p className="muted-text">AUD generation has not started yet.</p>
+                ) : null}
+
+                {audGenerationStatus ? (
+                  <div className="generation-status-card">
+                    <dl className="generation-status-grid">
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{audGenerationStatus.status}</dd>
+                      </div>
+                      <div>
+                        <dt>Current Stage</dt>
+                        <dd>{formatStageLabel(audGenerationStatus.current_stage)}</dd>
+                      </div>
+                      <div>
+                        <dt>Failed Stage</dt>
+                        <dd>{formatStageLabel(audGenerationStatus.failed_stage)}</dd>
+                      </div>
+                    </dl>
+
+                    <div className="generation-status-block">
+                      <h3>Completed Stages</h3>
+                      {audGenerationStatus.completed_stages.length > 0 ? (
+                        <ol className="stage-list">
+                          {audGenerationStatus.completed_stages.map((stage) => (
+                            <li key={stage}>{formatStageLabel(stage)}</li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p className="muted-text">No stages completed yet.</p>
+                      )}
+                    </div>
+
+                    <div className="generation-status-block">
+                      <h3>Warnings</h3>
+                      {audGenerationStatus.warnings.length > 0 ? (
+                        <ul className="warning-list">
+                          {audGenerationStatus.warnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="muted-text">No warnings.</p>
+                      )}
+                    </div>
+
+                    {audGenerationStatus.status === "failed" ? (
+                      <div className="generation-status-block">
+                        <h3>Error</h3>
+                        <p className="status-message status-error">
+                          {audGenerationStatus.error || "Unknown backend error."}
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </section>
 
             <section className="panel" aria-labelledby="metadata-title">
               <div className="section-heading">
@@ -1076,9 +1378,9 @@ export default function ProjectDetailPage() {
             <section className="panel" aria-labelledby="jobs-title">
               <div className="section-heading">
                 <div>
-                  <h2 id="jobs-title">Jobs</h2>
+                  <h2 id="jobs-title">Jobs / Debug Information</h2>
                   <p className="muted-text">
-                    Run the local backend worker manually to process pending jobs.
+                    Inspect backend job history and developer-only pipeline controls.
                   </p>
                 </div>
 
@@ -1087,39 +1389,85 @@ export default function ProjectDetailPage() {
 
               {isSectionExpanded("jobs") ? (
                 <div className="panel-content">
+                  <details className="debug-actions">
+                    <summary>Developer / Debug Actions</summary>
+                    <div className="button-group section-actions">
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateClassifyJob}
+                        disabled={isCreatingJob}
+                      >
+                        {isCreatingJob ? "Creating..." : "Classify Files"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateExtractAllJob}
+                        disabled={isCreatingExtractAllJob}
+                      >
+                        {isCreatingExtractAllJob ? "Creating..." : "Extract All Files"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateAudPlanJob}
+                        disabled={isCreatingAudPlanJob}
+                      >
+                        {isCreatingAudPlanJob ? "Creating..." : "Generate AUD Plan"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateOpenPointsJob}
+                        disabled={isCreatingOpenPointsJob}
+                      >
+                        {isCreatingOpenPointsJob
+                          ? "Creating..."
+                          : "Extract Open Points"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateEvidenceIndexJob}
+                        disabled={isCreatingEvidenceIndexJob}
+                      >
+                        {isCreatingEvidenceIndexJob
+                          ? "Creating..."
+                          : "Build Evidence Index"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateSourceSummariesJob}
+                        disabled={isCreatingSourceSummariesJob}
+                      >
+                        {isCreatingSourceSummariesJob
+                          ? "Creating..."
+                          : "Generate AI Source Summaries"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateSectionDraftsJob}
+                        disabled={isCreatingSectionDraftsJob}
+                      >
+                        {isCreatingSectionDraftsJob
+                          ? "Creating..."
+                          : "Generate AI Section Drafts"}
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button"
+                        onClick={handleCreateDocxJob}
+                        disabled={isCreatingDocxJob}
+                      >
+                        {isCreatingDocxJob ? "Creating..." : "Generate DOCX"}
+                      </button>
+                    </div>
+                  </details>
+
                   <div className="button-group section-actions">
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={handleCreateExtractAllJob}
-                      disabled={isCreatingExtractAllJob}
-                    >
-                      {isCreatingExtractAllJob ? "Creating..." : "Extract All Files"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={handleCreateAudPlanJob}
-                      disabled={isCreatingAudPlanJob}
-                    >
-                      {isCreatingAudPlanJob ? "Creating..." : "Generate AUD Plan"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={handleCreateOpenPointsJob}
-                      disabled={isCreatingOpenPointsJob}
-                    >
-                      {isCreatingOpenPointsJob ? "Creating..." : "Extract Open Points"}
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={handleCreateClassifyJob}
-                      disabled={isCreatingJob}
-                    >
-                      {isCreatingJob ? "Creating..." : "Classify Files"}
-                    </button>
                     <button
                       type="button"
                       className="secondary-button"
@@ -1472,16 +1820,6 @@ export default function ProjectDetailPage() {
                   <div className="button-group section-actions">
                     <button
                       type="button"
-                      className="primary-button"
-                      onClick={handleCreateEvidenceIndexJob}
-                      disabled={isCreatingEvidenceIndexJob}
-                    >
-                      {isCreatingEvidenceIndexJob
-                        ? "Creating..."
-                        : "Build Evidence Index"}
-                    </button>
-                    <button
-                      type="button"
                       className="secondary-button"
                       onClick={() => refreshEvidenceItems(params.projectId)}
                       disabled={isLoadingEvidenceItems}
@@ -1571,16 +1909,6 @@ export default function ProjectDetailPage() {
               {isSectionExpanded("source-summaries") ? (
                 <div className="panel-content">
                   <div className="button-group section-actions">
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={handleCreateSourceSummariesJob}
-                      disabled={isCreatingSourceSummariesJob}
-                    >
-                      {isCreatingSourceSummariesJob
-                        ? "Creating..."
-                        : "Generate AI Source Summaries"}
-                    </button>
                     <button
                       type="button"
                       className="secondary-button"
@@ -1696,16 +2024,6 @@ export default function ProjectDetailPage() {
                   </p>
 
                   <div className="button-group section-actions">
-                    <button
-                      type="button"
-                      className="primary-button"
-                      onClick={handleCreateSectionDraftsJob}
-                      disabled={isCreatingSectionDraftsJob}
-                    >
-                      {isCreatingSectionDraftsJob
-                        ? "Creating..."
-                        : "Generate AI Section Drafts"}
-                    </button>
                     <button
                       type="button"
                       className="secondary-button"
@@ -1951,14 +2269,6 @@ export default function ProjectDetailPage() {
                   <div className="button-group section-actions">
                     <button
                       type="button"
-                      className="primary-button"
-                      onClick={handleCreateDocxJob}
-                      disabled={isCreatingDocxJob}
-                    >
-                      {isCreatingDocxJob ? "Creating..." : "Generate DOCX"}
-                    </button>
-                    <button
-                      type="button"
                       className="secondary-button"
                       onClick={() => refreshGeneratedDocuments(params.projectId)}
                       disabled={isLoadingGeneratedDocuments}
@@ -1980,7 +2290,7 @@ export default function ProjectDetailPage() {
                   ) : null}
 
                   <div className="generated-document-list">
-                    {generatedDocuments.map((document) => (
+                    {orderedGeneratedDocuments.map((document) => (
                       <article key={document.id} className="generated-document-row">
                         <div>
                           <h3>{document.filename}</h3>

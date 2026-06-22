@@ -38,6 +38,7 @@ from app.services.docx_table_renderer import (
     NormalizedTable,
     TableNormalizer,
 )
+from app.services.image_deduplication import ImageDeduplicationService
 from app.services.template_resolver import TemplateResolver
 from app.services.template_population import (
     PopulatedDocumentModel,
@@ -838,9 +839,22 @@ def collect_section_ppt_images(
                 seen_paths.add(image_path)
                 candidates.append(
                     {
+                        "image_id": (
+                            f"{extracted_content.id}:slide:{slide_number}:"
+                            f"{Path(image_path).name}"
+                        ),
                         "storage_path": image_path,
+                        "source_uploaded_file_id": extracted_content.uploaded_file_id,
+                        "source_role": get_extracted_source_role(extracted_content),
+                        "source_type": "ppt_slide",
+                        "section_id": get_section_id(section),
                         "slide_number": slide_number,
                         "slide_title": caption_title,
+                        "caption": (
+                            f"Source image from slide {slide_number}: {caption_title}"
+                            if isinstance(slide_number, int)
+                            else f"Source image from slide: {caption_title}"
+                        ),
                     }
                 )
 
@@ -903,7 +917,15 @@ def collect_section_docx_images(
             seen_paths.add(storage_path)
             candidates.append(
                 {
+                    "image_id": (
+                        f"{extracted_content.id}:docx:{image.get('index')}:"
+                        f"{Path(storage_path).name}"
+                    ),
                     "storage_path": storage_path,
+                    "source_uploaded_file_id": extracted_content.uploaded_file_id,
+                    "source_role": get_extracted_source_role(extracted_content),
+                    "source_type": "docx_image",
+                    "section_id": get_section_id(section),
                     "slide_number": None,
                     "slide_title": image_section_title,
                     "caption": f"Source image from DOCX section: {image_section_title}",
@@ -1144,10 +1166,27 @@ def image_from_evidence(
     if not isinstance(image_path, str):
         return None
 
+    source_type = (
+        "ppt_slide"
+        if isinstance(slide_number, int) or evidence_item.source_role == "kt_ppt"
+        else "du_image"
+        if evidence_item.evidence_type == "image_reference"
+        else "manual_upload"
+    )
     return {
+        "image_id": f"evidence:{evidence_item.id}",
         "storage_path": image_path,
+        "source_uploaded_file_id": evidence_item.source_uploaded_file_id,
+        "source_role": evidence_item.source_role,
+        "source_type": source_type,
         "slide_number": slide_number if isinstance(slide_number, int) else None,
         "slide_title": evidence_item.title or "Selected image",
+        "caption": (
+            f"Source image from slide {slide_number}: {evidence_item.title}"
+            if isinstance(slide_number, int)
+            else evidence_item.title or "Selected image"
+        ),
+        "confidence_score": evidence_item.confidence,
     }
 
 
@@ -1172,10 +1211,24 @@ def normalize_included_images(
             )
             if isinstance(storage_path, str):
                 image = {
+                    "image_id": item.get("image_id"),
                     "storage_path": storage_path,
+                    "source_uploaded_file_id": item.get("source_uploaded_file_id"),
+                    "source_role": item.get("source_role"),
+                    "source_type": item.get("source_type") or "manual_upload",
+                    "section_id": item.get("section_id"),
+                    "page_number": item.get("page_number"),
+                    "bounding_box": item.get("bounding_box"),
                     "slide_number": item.get("slide_number"),
                     "slide_title": item.get("slide_title") or item.get("title") or "Selected image",
                     "caption": item.get("caption"),
+                    "width_px": item.get("width_px"),
+                    "height_px": item.get("height_px"),
+                    "file_size_bytes": item.get("file_size_bytes"),
+                    "checksum_hash": item.get("checksum_hash") or item.get("checksum"),
+                    "perceptual_hash": item.get("perceptual_hash"),
+                    "confidence_score": item.get("confidence_score")
+                    or item.get("confidence"),
                 }
             else:
                 evidence_item_id = item.get("evidence_item_id") or item.get("id")
@@ -1899,11 +1952,14 @@ def build_section_population_inputs(
     section_drafts: list[AUDSectionDraft],
     evidence_item_by_id: dict[str, EvidenceItem],
     options: DocxGenerationOptions,
+    image_deduplication_service: ImageDeduplicationService | None = None,
+    image_deduplication_metadata: dict[str, Any] | None = None,
 ) -> list[SectionPopulationInput]:
     draft_lookup = build_section_draft_lookup(section_drafts)
-    section_inputs: list[SectionPopulationInput] = []
+    prepared_sections: list[dict[str, Any]] = []
+    image_candidates: list[dict[str, Any]] = []
 
-    for section in iter_planned_sections(plan_payload):
+    for section_index, section in enumerate(iter_planned_sections(plan_payload), start=1):
         render_context = build_section_render_context(
             section,
             extracted_content_by_id,
@@ -1935,26 +1991,85 @@ def build_section_population_inputs(
             ensure_json_list(render_context.draft_json.get("included_images")),
             evidence_item_by_id,
         )
-        images = (
-            to_populated_images(
-                selected_images
-                or (
-                    collect_section_images(section, extracted_content_by_id)
-                    if options.include_images
-                    else []
-                )
+        raw_images = []
+        if options.include_images:
+            raw_images = selected_images or collect_section_images(
+                section,
+                extracted_content_by_id,
             )
-            if options.include_images
-            else []
+
+        section_key = str(section_index)
+        for image_index, image in enumerate(raw_images, start=1):
+            candidate = dict(image)
+            candidate.setdefault("section_id", get_section_id(section) or title)
+            candidate.setdefault(
+                "image_id",
+                (
+                    f"section:{section_key}:image:{image_index}:"
+                    f"{Path(str(candidate.get('storage_path', 'image'))).name}"
+                ),
+            )
+            candidate["_section_key"] = section_key
+            image_candidates.append(candidate)
+
+        prepared_sections.append(
+            {
+                "section_key": section_key,
+                "title": title,
+                "paragraphs": paragraphs,
+                "tables": tables,
+                "source_role_basis": get_section_source_role_basis(section),
+            }
         )
 
+    images_by_section_key: dict[str, list[dict[str, Any]]] = {}
+    if options.include_images and image_candidates:
+        if image_deduplication_service is not None:
+            deduplication_result = image_deduplication_service.deduplicate(
+                image_candidates
+            )
+            if image_deduplication_metadata is not None:
+                image_deduplication_metadata.update(
+                    deduplication_result.to_metadata()
+                )
+            retained_images = [
+                dict(candidate.original_payload)
+                for candidate in deduplication_result.retained_candidates
+            ]
+        else:
+            retained_images = image_candidates
+
+        for image in retained_images:
+            section_key = image.get("_section_key")
+            if not isinstance(section_key, str):
+                continue
+
+            image.pop("_section_key", None)
+            images_by_section_key.setdefault(section_key, []).append(image)
+    elif image_deduplication_metadata is not None:
+        image_deduplication_metadata.update(
+            {
+                "candidate_count": 0,
+                "retained_count": 0,
+                "duplicates_removed_count": 0,
+                "placeholder_removed_count": 0,
+                "retained_image_ids": [],
+                "removed_images": [],
+            }
+        )
+
+    section_inputs: list[SectionPopulationInput] = []
+    for prepared_section in prepared_sections:
+        section_key = prepared_section["section_key"]
         section_inputs.append(
             SectionPopulationInput(
-                title=title,
-                paragraphs=paragraphs,
-                tables=tables,
-                images=images,
-                source_role_basis=get_section_source_role_basis(section),
+                title=prepared_section["title"],
+                paragraphs=prepared_section["paragraphs"],
+                tables=prepared_section["tables"],
+                images=to_populated_images(
+                    images_by_section_key.get(section_key, [])
+                ),
+                source_role_basis=prepared_section["source_role_basis"],
             )
         )
 
@@ -2154,6 +2269,8 @@ def build_document(
     options: DocxGenerationOptions,
     settings: Settings,
     template_path: Path,
+    image_deduplication_service: ImageDeduplicationService,
+    image_deduplication_metadata: dict[str, Any],
 ) -> Document:
     document = Document(str(template_path))
     current_date = utc_now().date()
@@ -2163,6 +2280,8 @@ def build_document(
         section_drafts=section_drafts,
         evidence_item_by_id=evidence_item_by_id,
         options=options,
+        image_deduplication_service=image_deduplication_service,
+        image_deduplication_metadata=image_deduplication_metadata,
     )
     document_model = TemplatePopulationService(
         selected_template_path=template_path,
@@ -2252,6 +2371,7 @@ def generate_docx(
             storage_service=resolved_storage_service,
             settings=resolved_settings,
         ).resolve(temporary_root)
+        image_deduplication_metadata: dict[str, Any] = {}
         document = build_document(
             project=project,
             plan_payload=plan_payload,
@@ -2264,6 +2384,10 @@ def generate_docx(
             options=resolved_options,
             settings=resolved_settings,
             template_path=template.path,
+            image_deduplication_service=ImageDeduplicationService(
+                resolved_storage_service
+            ),
+            image_deduplication_metadata=image_deduplication_metadata,
         )
         output_path = temporary_root / filename
         document.save(output_path)
@@ -2275,7 +2399,10 @@ def generate_docx(
         storage_path=storage_path,
         document_type=DOCUMENT_TYPE,
         metadata_json=json.dumps(
-            {"open_points_fallback": open_point_selection.used_fallback}
+            {
+                "open_points_fallback": open_point_selection.used_fallback,
+                "image_deduplication": image_deduplication_metadata,
+            }
         ),
     )
     session.add(generated_document)

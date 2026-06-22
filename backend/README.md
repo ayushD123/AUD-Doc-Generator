@@ -1058,7 +1058,17 @@ Current DOCX generation scope:
   blank leading cells are preserved for process assignment/orchestration tables.
   Ambiguous or malformed table text falls back to paragraph rendering only with
   a logged reason.
-- Selected draft images from `draft_json.included_images` are inserted when `include_images=true`; otherwise image insertion is skipped.
+- Selected draft images from `draft_json.included_images` are deduplicated and
+  inserted when `include_images=true`; otherwise image insertion is skipped.
+- Image candidates from draft selections, DOCX extraction, PPT extraction,
+  Document Understanding style references, rendered pages, or manual uploads
+  pass through `ImageDeduplicationService` before DOCX rendering. Exact content
+  hash matches, same source/page/bounding-box references, close perceptual
+  hashes when Pillow/imagehash support is available, and safe caption/dimension
+  metadata matches are treated as duplicates. Template placeholder images such
+  as `<Insert diagram / screenshot here>` are excluded, and generated document
+  `metadata_json.image_deduplication` records candidate counts, retained image
+  IDs, removed duplicate IDs, and removal reasons.
 - Open Points are included only when `include_open_points=true`. By default, only rows with `source_type=llm_enhanced` and status `Open` are rendered.
 - If the latest AUD plan is missing, contains only standard sections, or predates extracted FDD content, DOCX generation refreshes the deterministic AUD plan before rendering.
 - Enterprise Structure is a carry-forward section when detected in FDD, PPT, or other extracted source content, and is inserted with source text, tables, and supported associated images. If not detected, it is omitted instead of inventing BU/LE content.

@@ -56,6 +56,24 @@ export type GenerateDocxJobOptions = {
   include_open_points?: boolean;
 };
 
+export type AUDGenerationStart = {
+  job_id: string;
+  status: string;
+  message: string;
+};
+
+export type AUDGenerationStatus = {
+  job_id: string;
+  status: string;
+  current_stage: string | null;
+  completed_stages: string[];
+  failed_stage: string | null;
+  warnings: string[];
+  final_document_id: string | null;
+  final_document_url: string | null;
+  error: string | null;
+};
+
 export type ExtractedContent = {
   id: string;
   project_id: string;
@@ -313,6 +331,33 @@ export function listGeneratedDocuments(projectId: string) {
   return requestJson<GeneratedDocument[]>(
     `/projects/${projectId}/generated-documents`,
   );
+}
+
+export function startAudGeneration(projectId: string) {
+  return requestJson<AUDGenerationStart>(`/projects/${projectId}/generate-aud`, {
+    method: "POST",
+  });
+}
+
+export async function getAudGenerationStatus(projectId: string) {
+  const response = await fetch(
+    `${getApiBaseUrl()}/projects/${projectId}/generate-aud/status`,
+    {
+      headers: {
+        Accept: "application/json",
+      },
+    },
+  );
+
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error(`Request failed with HTTP ${response.status}.`);
+  }
+
+  return (await response.json()) as AUDGenerationStatus;
 }
 
 export function listEvidenceItems(projectId: string) {

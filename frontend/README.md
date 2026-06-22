@@ -2,7 +2,7 @@
 
 Next.js TypeScript frontend skeleton for the Oracle AUD Generator.
 
-This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, collapsible project detail sections, local file upload UI, job controls, extracted content review, read-only evidence index review, read-only source summary review, read-only AI section draft review, and generated document download controls that call the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing in the frontend, complex styling, or editing generated AUD content in the browser.
+This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, collapsible project detail sections, local file upload UI, one-click AUD generation, generation progress polling, extracted content review, read-only evidence index review, read-only source summary review, read-only AI section draft review, and final DOCX download controls that call the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing in the frontend, complex styling, review workflow UI, quality reports, or editing generated AUD content in the browser.
 
 ## Prerequisites
 
@@ -79,25 +79,19 @@ Manual checks:
 - In Uploaded Files, select a source role such as KT Session (MP4) and choose an allowed file type.
 - Click Upload File.
 - Confirm the uploaded file list refreshes and shows filename, source role, file type, and created date.
-- In Jobs, click Extract All Files.
-- Confirm the jobs list refreshes with a pending `extract_all` job.
-- In Jobs, click Generate AUD Plan.
-- Confirm the jobs list refreshes with a pending `generate_aud_plan` job.
-- In Jobs, click Extract Open Points.
-- Confirm the jobs list refreshes with a pending `extract_open_points` job.
-- In Jobs, click Classify Files.
-- Confirm the jobs list refreshes with a pending `classify_files` job.
-- In Evidence Index, click Build Evidence Index.
-- Confirm the jobs list refreshes with a pending `build_evidence_index` job.
-- In Source Summaries, click Generate AI Source Summaries.
-- Confirm the jobs list refreshes with a pending `generate_source_summaries_ai` job.
-- In Section Drafts, click Generate AI Section Drafts.
-- Confirm the jobs list refreshes with a pending `generate_section_drafts_ai` job.
-- In Generated Documents, click Generate DOCX.
-- Confirm the jobs list refreshes with a pending `generate_docx` job.
+- Near the top of the project detail page, click Generate AUD.
+- Confirm the Generate AUD button is disabled and shows a generating state.
+- Confirm the AUD Generation panel shows current status, current stage, completed stages, warnings, and any backend error.
+- Confirm the frontend polls `GET /projects/{projectId}/generate-aud/status` every few seconds while the run is not terminal.
 - In a backend terminal, run `python -m app.workers.local_worker`.
-- Click Refresh Jobs and confirm the job status/progress updates.
-- Expected result for Extract All Files: the job reaches `completed` at `100%`, or `completed_with_warnings` if some files extracted and some failed.
+- Expected result for one-click generation: the run reaches `completed` or `completed_with_warnings`, or shows `failed` with the failed stage and backend error.
+- Confirm polling stops when the status is `completed`, `completed_with_warnings`, or `failed`.
+- When completed or completed with warnings, confirm the page shows `Final AUD is ready`.
+- Confirm the Final Generated AUD DOCX card appears at the top of the project detail page with a Download DOCX link.
+- Confirm generated documents refresh automatically after completion.
+- Expand Jobs / Debug Information and then Developer / Debug Actions.
+- Confirm intermediate buttons such as Extract All Files, Generate AUD Plan, Build Evidence Index, Generate AI Source Summaries, Generate AI Section Drafts, and Generate DOCX are available only inside Developer / Debug Actions.
+- Confirm existing debug and partial-output sections remain available below the one-click flow.
 - Confirm the AUD Plan card appears on the project detail page.
 - Click Refresh AUD Plan.
 - Expected result before plan generation: the card shows `No AUD plan generated yet.`
@@ -132,9 +126,10 @@ Manual checks:
 - Confirm the Generated Documents card appears on the project detail page.
 - Click Refresh Documents.
 - Expected result before DOCX generation: the card shows `No generated documents yet.`
-- After backend DOCX generation has run, expected result: the card lists each generated document filename, created date, and a Download DOCX link.
+- After backend AUD generation has run, expected result: the card lists each generated document filename, created date, and a Download DOCX link, with the final AUD sorted first.
 - Click Download DOCX.
 - Expected result: the browser downloads the file from the backend generated document download endpoint.
+- Confirm no review workflow UI or quality/evidence report UI has been added.
 
 The frontend calls:
 
@@ -152,6 +147,8 @@ POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/build-evidence-index
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/generate-source-summaries-ai
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/generate-section-drafts-ai
 POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs/generate-docx
+POST {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/generate-aud
+GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/generate-aud/status
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/jobs
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/extracted-content
 GET  {NEXT_PUBLIC_API_BASE_URL}/projects/{projectId}/evidence-items

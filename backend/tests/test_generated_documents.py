@@ -1,6 +1,7 @@
 import json
 from base64 import b64decode
 from collections.abc import Generator
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,20 @@ ONE_PIXEL_PNG = (
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
     "AAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 )
+
+
+def checkerboard_png_bytes() -> bytes:
+    from PIL import Image
+
+    image = Image.new("RGB", (8, 8), "white")
+    for x in range(8):
+        for y in range(8):
+            if (x + y) % 2 == 0:
+                image.putpixel((x, y), (0, 0, 0))
+
+    output = BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
 
 
 @pytest.fixture()
@@ -1202,6 +1217,89 @@ def test_ai_draft_selected_image_is_included_when_enabled(
     assert "Source image from slide 10: Order Capture selected image" in document_text
 
 
+def test_docx_generator_receives_only_deduplicated_images(
+    client_session_and_storage: tuple[TestClient, sessionmaker, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, session_local, storage_root = client_session_and_storage
+    project_id = create_project(client)
+    first_image_storage_path = (
+        f"projects/{project_id}/extracted_images/ppt-file/slide_010_image_001.png"
+    )
+    duplicate_image_storage_path = (
+        f"projects/{project_id}/extracted_images/docx-file/image_001.png"
+    )
+    first_image_path = storage_root / first_image_storage_path
+    duplicate_image_path = storage_root / duplicate_image_storage_path
+    first_image_path.parent.mkdir(parents=True, exist_ok=True)
+    duplicate_image_path.parent.mkdir(parents=True, exist_ok=True)
+    first_image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+    duplicate_image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+    captured_image_batches: list[list[dict[str, object]]] = []
+    original_add_section_images = docx_generation.add_section_images
+
+    def capture_add_section_images(*args, **kwargs):
+        images = args[1] if len(args) > 1 else kwargs.get("images", [])
+        captured_image_batches.append(list(images))
+        return original_add_section_images(*args, **kwargs)
+
+    monkeypatch.setattr(
+        docx_generation,
+        "add_section_images",
+        capture_add_section_images,
+    )
+
+    with session_local() as session:
+        add_project_generation_inputs(session, project_id)
+        session.add(
+            AUDSectionDraft(
+                project_id=project_id,
+                section_id="section-order-capture",
+                title="Order Capture",
+                draft_text="AI accepted section with duplicate selected images.",
+                draft_json=json.dumps(
+                    {
+                        "included_images": [
+                            {
+                                "image_id": "selected-ppt",
+                                "storage_path": first_image_storage_path,
+                                "source_uploaded_file_id": "ppt-file",
+                                "source_type": "ppt_slide",
+                                "slide_number": 10,
+                                "caption": "Selected process screenshot",
+                            },
+                            {
+                                "image_id": "selected-docx-copy",
+                                "storage_path": duplicate_image_storage_path,
+                                "source_uploaded_file_id": "docx-file",
+                                "source_type": "docx_image",
+                                "caption": "Selected process screenshot",
+                            },
+                        ],
+                        "included_tables": [],
+                    }
+                ),
+                confidence="high",
+                review_status="accepted",
+            )
+        )
+        session.commit()
+
+        generated_document = docx_generation.generate_docx(
+            session,
+            project_id,
+            options=docx_generation.DocxGenerationOptions(include_images=True),
+        )
+        metadata = json.loads(generated_document.metadata_json or "{}")
+
+    non_empty_batches = [batch for batch in captured_image_batches if batch]
+    assert len(non_empty_batches) == 1
+    assert len(non_empty_batches[0]) == 1
+    assert metadata["image_deduplication"]["candidate_count"] == 2
+    assert metadata["image_deduplication"]["duplicates_removed_count"] == 1
+    assert metadata["image_deduplication"]["retained_image_ids"] == ["selected-ppt"]
+
+
 def test_missing_section_content_is_omitted_without_raw_placeholder(
     client_session_and_storage: tuple[TestClient, sessionmaker, Path],
 ) -> None:
@@ -1659,7 +1757,7 @@ def test_ppt_images_are_added_for_matching_section(
     unsupported_image_path.write_bytes(b"unsupported-wmf")
     image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
     low_value_image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
-    mapped_image_path.write_bytes(b64decode(ONE_PIXEL_PNG))
+    mapped_image_path.write_bytes(checkerboard_png_bytes())
 
     with session_local() as session:
         ppt_file = UploadedFile(

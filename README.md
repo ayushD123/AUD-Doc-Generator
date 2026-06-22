@@ -60,7 +60,11 @@ LLM-enhanced Open Points. Reviewed AI section drafts are preferred when
 available; otherwise deterministic source-backed content is rendered. The
 `generate-docx` job accepts options for AI draft usage, draft-status sections,
 images, and Open Points while keeping FDD as the golden source and requiring
-internal review before customer sharing.
+internal review before customer sharing. Before images are inserted,
+`ImageDeduplicationService` removes exact, source-reference, perceptual, and
+safe metadata duplicates, excludes template placeholder screenshots, retains the
+best-quality candidate, and stores the dedup report in generated document
+metadata.
 
 DOCX tables are rendered through `DOCXTableRenderer`. Markdown tables,
 pipe-delimited tables, selected draft/evidence tables, extracted DOCX/PPTX
