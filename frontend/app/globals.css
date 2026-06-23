@@ -266,6 +266,11 @@ body {
   transition: opacity 180ms ease;
 }
 
+body:not(.theme-dark) .border-glow-card::before,
+body:not(.theme-dark) .edge-light {
+  opacity: 0;
+}
+
 .border-glow-card:hover::before,
 .border-glow-card.sweep-active::before {
   opacity: calc(var(--fill-opacity) + 0.16);
