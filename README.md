@@ -18,7 +18,7 @@ When document generation behavior is implemented later, the FDD should be treate
 
 - Frontend: Next.js with TypeScript
 - Backend: FastAPI with Python
-- Database: local SQLite through SQLAlchemy, designed for a later move to Oracle Autonomous Database
+- Database: local SQLite through SQLAlchemy by default, with optional Oracle Autonomous Database configuration through python-oracledb
 - File storage: local filesystem by default, with an optional OCI Object Storage adapter
 - Async jobs: database-backed job status with local polling by default and optional OCI Queue publishing/worker support
 
@@ -28,6 +28,35 @@ When document generation behavior is implemented later, the FDD should be treate
 - Add features iteratively rather than building the full AUD generator at once.
 - Preserve clear boundaries between frontend, backend, documentation, and scripts.
 - Prefer local-only development defaults until cloud integrations are explicitly introduced.
+
+## Database Configuration
+
+SQLite remains the default for local development:
+
+```text
+DB_PROVIDER=sqlite
+DATABASE_URL=
+```
+
+When `DATABASE_URL` is set, it is used directly. Otherwise `DB_PROVIDER`
+selects the database backend. For Oracle Autonomous Database, configure:
+
+```text
+DB_PROVIDER=oracle
+ORACLE_DB_USER=<database-user>
+ORACLE_DB_PASSWORD=<database-password>
+ORACLE_DB_DSN=<tns-alias-or-connect-descriptor>
+ORACLE_DB_WALLET_DIR=<path-outside-repo-to-wallet>
+ORACLE_DB_WALLET_PASSWORD=<optional-wallet-password>
+ORACLE_DB_ECHO=false
+ORACLE_DB_POOL_SIZE=5
+ORACLE_DB_MAX_OVERFLOW=10
+ORACLE_DB_POOL_PRE_PING=true
+```
+
+Wallet files must stay outside the repository. Large uploaded files and
+generated documents remain in local storage or Object Storage; the database
+stores metadata and storage keys only.
 
 ## LLM Safeguards
 

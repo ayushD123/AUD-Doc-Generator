@@ -29,11 +29,16 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
 
-def create_app(create_tables_on_startup: bool = True) -> FastAPI:
+def create_app(create_tables_on_startup: bool | None = None) -> FastAPI:
     settings = get_settings()
+    enable_lifespan = (
+        settings.should_auto_create_tables()
+        if create_tables_on_startup is None
+        else create_tables_on_startup
+    )
     application = FastAPI(
         title=settings.APP_NAME,
-        lifespan=lifespan if create_tables_on_startup else None,
+        lifespan=lifespan if enable_lifespan else None,
     )
     application.add_middleware(
         CORSMiddleware,

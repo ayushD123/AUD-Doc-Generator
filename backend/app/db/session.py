@@ -4,13 +4,18 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
+from app.core.database_url import build_database_engine_config, log_database_startup
 from app.db.base import Base
 
 settings = get_settings()
+database_engine_config = build_database_engine_config(settings)
 
-connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
-
-engine = create_engine(settings.DATABASE_URL, connect_args=connect_args)
+log_database_startup(database_engine_config)
+engine = create_engine(
+    database_engine_config.url,
+    connect_args=database_engine_config.connect_args,
+    **database_engine_config.engine_args,
+)
 SessionLocal = sessionmaker(
     bind=engine,
     autoflush=False,

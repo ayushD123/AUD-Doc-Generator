@@ -456,7 +456,8 @@ h3 {
 }
 
 .primary-button,
-.secondary-button {
+.secondary-button,
+.danger-button {
   min-height: 42px;
   border-radius: 6px;
   cursor: pointer;
@@ -482,8 +483,21 @@ h3 {
   color: var(--text);
 }
 
+.danger-button {
+  border: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
+  padding: 0 14px;
+  background: color-mix(in srgb, var(--error) 8%, var(--surface));
+  color: var(--error);
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, var(--surface));
+}
+
 .primary-button:disabled,
-.secondary-button:disabled {
+.secondary-button:disabled,
+.danger-button:disabled {
   cursor: not-allowed;
   opacity: 0.72;
 }
@@ -527,6 +541,17 @@ h3 {
   gap: 12px;
 }
 
+.project-row-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px var(--shadow-soft);
+  overflow: hidden;
+}
+
 .project-row,
 .file-row,
 .job-row,
@@ -546,8 +571,14 @@ h3 {
   box-shadow: 0 8px 24px var(--shadow-soft);
 }
 
+.project-row {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .project-row:hover {
-  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
 }
 
 .project-row p,
@@ -567,6 +598,15 @@ h3 {
 
 .file-remove-button {
   margin-top: 12px;
+}
+
+.project-delete-button {
+  min-width: 92px;
+  min-height: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
 }
 
 .project-meta,
@@ -1032,6 +1072,7 @@ dd {
 
   .project-form,
   .upload-form,
+  .project-row-shell,
   .project-row,
   .file-row,
   .job-row,
@@ -1069,8 +1110,15 @@ dd {
   }
 
   .primary-button,
-  .secondary-button {
+  .secondary-button,
+  .danger-button {
     width: 100%;
+  }
+
+  .project-delete-button {
+    min-height: 44px;
+    border-top: 1px solid color-mix(in srgb, var(--error) 40%, var(--border));
+    border-left: 0;
   }
 
   .button-group {

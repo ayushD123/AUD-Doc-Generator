@@ -4,7 +4,18 @@ from app.core.config import Settings
 def test_settings_use_local_defaults(monkeypatch) -> None:
     monkeypatch.delenv("APP_NAME", raising=False)
     monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("DB_PROVIDER", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("AUTO_CREATE_TABLES", raising=False)
+    monkeypatch.delenv("ORACLE_DB_USER", raising=False)
+    monkeypatch.delenv("ORACLE_DB_PASSWORD", raising=False)
+    monkeypatch.delenv("ORACLE_DB_DSN", raising=False)
+    monkeypatch.delenv("ORACLE_DB_WALLET_DIR", raising=False)
+    monkeypatch.delenv("ORACLE_DB_WALLET_PASSWORD", raising=False)
+    monkeypatch.delenv("ORACLE_DB_ECHO", raising=False)
+    monkeypatch.delenv("ORACLE_DB_POOL_SIZE", raising=False)
+    monkeypatch.delenv("ORACLE_DB_MAX_OVERFLOW", raising=False)
+    monkeypatch.delenv("ORACLE_DB_POOL_PRE_PING", raising=False)
     monkeypatch.delenv("LOCAL_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("MAX_SPREADSHEET_ROWS_PER_SHEET", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
@@ -35,7 +46,19 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
 
     assert settings.APP_NAME == "aud-generator-api"
     assert settings.ENVIRONMENT == "local"
-    assert settings.DATABASE_URL == "sqlite:///./aud_generator.db"
+    assert settings.DB_PROVIDER == "sqlite"
+    assert settings.DATABASE_URL is None
+    assert settings.AUTO_CREATE_TABLES is None
+    assert settings.should_auto_create_tables() is True
+    assert settings.ORACLE_DB_USER is None
+    assert settings.ORACLE_DB_PASSWORD is None
+    assert settings.ORACLE_DB_DSN is None
+    assert settings.ORACLE_DB_WALLET_DIR is None
+    assert settings.ORACLE_DB_WALLET_PASSWORD is None
+    assert settings.ORACLE_DB_ECHO is False
+    assert settings.ORACLE_DB_POOL_SIZE == 5
+    assert settings.ORACLE_DB_MAX_OVERFLOW == 10
+    assert settings.ORACLE_DB_POOL_PRE_PING is True
     assert settings.LOCAL_STORAGE_ROOT == "storage"
     assert settings.JOB_QUEUE_BACKEND == "local"
     assert settings.OCI_SPEECH_OUTPUT_PREFIX == "projects/{project_id}/speech/"
@@ -68,7 +91,18 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
 def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("APP_NAME", "custom-aud-api")
     monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("DB_PROVIDER", "oracle")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./test.db")
+    monkeypatch.setenv("AUTO_CREATE_TABLES", "false")
+    monkeypatch.setenv("ORACLE_DB_USER", "aud_user")
+    monkeypatch.setenv("ORACLE_DB_PASSWORD", "secret")
+    monkeypatch.setenv("ORACLE_DB_DSN", "adb_high")
+    monkeypatch.setenv("ORACLE_DB_WALLET_DIR", "C:/wallets/aud")
+    monkeypatch.setenv("ORACLE_DB_WALLET_PASSWORD", "wallet-secret")
+    monkeypatch.setenv("ORACLE_DB_ECHO", "true")
+    monkeypatch.setenv("ORACLE_DB_POOL_SIZE", "9")
+    monkeypatch.setenv("ORACLE_DB_MAX_OVERFLOW", "4")
+    monkeypatch.setenv("ORACLE_DB_POOL_PRE_PING", "false")
     monkeypatch.setenv("LOCAL_STORAGE_ROOT", "./test_storage")
     monkeypatch.setenv("JOB_QUEUE_BACKEND", "oci")
     monkeypatch.setenv("OCI_SPEECH_OUTPUT_PREFIX", "speech/{project_id}/")
@@ -102,7 +136,19 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
 
     assert settings.APP_NAME == "custom-aud-api"
     assert settings.ENVIRONMENT == "test"
+    assert settings.DB_PROVIDER == "oracle"
     assert settings.DATABASE_URL == "sqlite:///./test.db"
+    assert settings.AUTO_CREATE_TABLES is False
+    assert settings.should_auto_create_tables() is False
+    assert settings.ORACLE_DB_USER == "aud_user"
+    assert settings.ORACLE_DB_PASSWORD == "secret"
+    assert settings.ORACLE_DB_DSN == "adb_high"
+    assert settings.ORACLE_DB_WALLET_DIR == "C:/wallets/aud"
+    assert settings.ORACLE_DB_WALLET_PASSWORD == "wallet-secret"
+    assert settings.ORACLE_DB_ECHO is True
+    assert settings.ORACLE_DB_POOL_SIZE == 9
+    assert settings.ORACLE_DB_MAX_OVERFLOW == 4
+    assert settings.ORACLE_DB_POOL_PRE_PING is False
     assert settings.LOCAL_STORAGE_ROOT == "./test_storage"
     assert settings.JOB_QUEUE_BACKEND == "oci"
     assert settings.OCI_SPEECH_OUTPUT_PREFIX == "speech/{project_id}/"
@@ -139,3 +185,10 @@ def test_settings_accept_common_false_typo_for_document_flags(monkeypatch) -> No
     settings = Settings(_env_file=None)
 
     assert settings.OCI_DOCUMENT_ENABLE_DOCX is False
+
+
+def test_auto_create_tables_defaults_false_for_oracle() -> None:
+    settings = Settings(DB_PROVIDER="oracle", _env_file=None)
+
+    assert settings.AUTO_CREATE_TABLES is None
+    assert settings.should_auto_create_tables() is False

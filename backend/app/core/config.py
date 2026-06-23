@@ -7,7 +7,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     APP_NAME: str = "aud-generator-api"
     ENVIRONMENT: str = "local"
-    DATABASE_URL: str = "sqlite:///./aud_generator.db"
+    DB_PROVIDER: str = "sqlite"
+    DATABASE_URL: str | None = None
+    AUTO_CREATE_TABLES: bool | None = None
+    ORACLE_DB_USER: str | None = None
+    ORACLE_DB_PASSWORD: str | None = None
+    ORACLE_DB_DSN: str | None = None
+    ORACLE_DB_WALLET_DIR: str | None = None
+    ORACLE_DB_WALLET_PASSWORD: str | None = None
+    ORACLE_DB_ECHO: bool = False
+    ORACLE_DB_POOL_SIZE: int = 5
+    ORACLE_DB_MAX_OVERFLOW: int = 10
+    ORACLE_DB_POOL_PRE_PING: bool = True
     STORAGE_BACKEND: str = "local"
     JOB_QUEUE_BACKEND: str = "local"
     LOCAL_STORAGE_ROOT: str = "storage"
@@ -78,6 +89,9 @@ class Settings(BaseSettings):
         "INTERNAL_DEBUG_OUTPUT",
         "REQUIRE_LLM_ENHANCED_OPEN_POINTS",
         "ALLOW_RAW_OPEN_POINTS_FALLBACK",
+        "ORACLE_DB_ECHO",
+        "ORACLE_DB_POOL_PRE_PING",
+        "AUTO_CREATE_TABLES",
         mode="before",
     )
     @classmethod
@@ -86,6 +100,12 @@ class Settings(BaseSettings):
             return False
 
         return value
+
+    def should_auto_create_tables(self) -> bool:
+        if self.AUTO_CREATE_TABLES is not None:
+            return self.AUTO_CREATE_TABLES
+
+        return self.DB_PROVIDER.strip().lower() != "oracle"
 
 
 @lru_cache

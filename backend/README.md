@@ -54,9 +54,29 @@ Expected response:
 }
 ```
 
-## Local Database
+Database health check:
 
-The backend uses SQLAlchemy 2.x with SQLite for local development.
+```text
+GET http://127.0.0.1:8000/health/db
+```
+
+Expected successful response:
+
+```json
+{
+  "status": "ok",
+  "db_provider": "sqlite",
+  "database_dialect": "sqlite",
+  "can_connect": true,
+  "message": "Database connection check succeeded."
+}
+```
+
+## Database Configuration
+
+The backend uses SQLAlchemy 2.x. SQLite remains the default for local
+development and tests, and Oracle Autonomous Database can be enabled through
+environment configuration without changing business logic.
 
 Default database URL:
 
@@ -68,14 +88,180 @@ The app creates tables automatically on startup for local development. The SQLit
 
 `create_all()` creates missing tables, but it does not alter existing tables when model columns change. Until Alembic migrations are introduced, either delete `aud_generator.db` during local development or manually add simple nullable columns when needed.
 
-To override the database URL for a local run:
+Default local settings:
+
+```powershell
+$env:DB_PROVIDER = "sqlite"
+$env:DATABASE_URL = ""
+uvicorn app.main:app --reload
+```
+
+To override the database URL directly for a local run:
 
 ```powershell
 $env:DATABASE_URL = "sqlite:///./aud_generator.db"
 uvicorn app.main:app --reload
 ```
 
-The same `DATABASE_URL` setting is the future switch point for Oracle Autonomous Database once that integration is introduced.
+When `DATABASE_URL` is set, it is used directly. Otherwise `DB_PROVIDER`
+selects the backend.
+
+### Oracle Autonomous Database
+
+Oracle support uses SQLAlchemy's `oracle+oracledb` dialect with
+`python-oracledb` Thin mode first. Do not store wallet files in this repository.
+
+Required Oracle settings:
+
+```powershell
+$env:DB_PROVIDER = "oracle"
+$env:DATABASE_URL = ""
+$env:ORACLE_DB_USER = "<database-user>"
+$env:ORACLE_DB_PASSWORD = "<database-password>"
+$env:ORACLE_DB_DSN = "<tns-alias-or-connect-descriptor>"
+```
+
+Optional wallet and pool settings:
+
+```powershell
+$env:ORACLE_DB_WALLET_DIR = "C:\path\outside\repo\wallet"
+$env:ORACLE_DB_WALLET_PASSWORD = "<optional-wallet-password>"
+$env:ORACLE_DB_ECHO = "false"
+$env:ORACLE_DB_POOL_SIZE = "5"
+$env:ORACLE_DB_MAX_OVERFLOW = "10"
+$env:ORACLE_DB_POOL_PRE_PING = "true"
+```
+
+Startup logs show the selected database provider and a password-hidden URL.
+Large uploaded files, extracted images, and generated DOCX files remain in
+local storage or Object Storage; the database stores metadata and storage keys,
+not file bytes.
+
+Do not run migrations yet. Automatic `create_all()` remains the local
+development startup behavior for this phase.
+
+`AUTO_CREATE_TABLES` controls startup table creation while the migration path is
+stabilizing:
+
+```powershell
+$env:AUTO_CREATE_TABLES = "true"   # current SQLite local-development default
+$env:AUTO_CREATE_TABLES = "false"  # recommended for Oracle / migration-managed DBs
+```
+
+When `AUTO_CREATE_TABLES` is unset, SQLite defaults to automatic startup table
+creation and Oracle defaults to migration-managed schema creation.
+
+### Alembic Migrations
+
+Alembic migration support lives under `backend/alembic/` and uses the same
+database settings as the application. Keep `DATABASE_URL` blank to use
+`DB_PROVIDER`, or set `DATABASE_URL` directly for a one-off migration target.
+
+Create a new migration after model changes:
+
+```powershell
+alembic revision --autogenerate -m "initial schema"
+```
+
+Apply migrations:
+
+```powershell
+alembic upgrade head
+```
+
+Rollback one migration:
+
+```powershell
+alembic downgrade -1
+```
+
+Run migrations against Oracle Autonomous Database:
+
+```powershell
+$env:DB_PROVIDER = "oracle"
+$env:DATABASE_URL = ""
+$env:AUTO_CREATE_TABLES = "false"
+$env:ORACLE_DB_USER = "<database-user>"
+$env:ORACLE_DB_PASSWORD = "<database-password>"
+$env:ORACLE_DB_DSN = "<tns-alias-or-connect-descriptor>"
+$env:ORACLE_DB_WALLET_DIR = "C:\path\outside\repo\wallet"
+alembic upgrade head
+```
+
+Verify Oracle connectivity without running migrations:
+
+```powershell
+$env:DB_PROVIDER = "oracle"
+$env:DATABASE_URL = ""
+$env:AUTO_CREATE_TABLES = "false"
+$env:ORACLE_DB_USER = "<database-user>"
+$env:ORACLE_DB_PASSWORD = "<database-password>"
+$env:ORACLE_DB_DSN = "<tns-alias-or-connect-descriptor>"
+$env:ORACLE_DB_WALLET_DIR = "C:\path\outside\repo\wallet"
+python -m app.scripts.check_db_connection
+```
+
+Expected CLI output includes provider, dialect, sanitized URL, DSN/service
+alias, wallet directory existence, and connection status. It must not print the
+database password or wallet password.
+
+After starting the API with the same environment, verify through HTTP:
+
+```powershell
+curl.exe "http://127.0.0.1:8000/health/db"
+```
+
+Run the Oracle ORM smoke test after `alembic upgrade head` has created the
+schema:
+
+```powershell
+python -m app.scripts.oracle_smoke_test
+```
+
+The smoke test requires `DB_PROVIDER=oracle`. It creates a uniquely named test
+project, uploaded-file metadata, a completed AUD-generation-style job, extracted
+CLOB/JSON content, an AUD plan, generation run metadata, and generated document
+metadata. It then reads the rows back, verifies JSON/text and timestamp fields,
+queries the generated document list with ordering, and deletes the test project
+so the related smoke-test records are cleaned up through ORM cascades.
+
+Expected successful output includes:
+
+```text
+provider: oracle
+dialect: oracle
+status: ok
+PASS: created project
+PASS: created uploaded file metadata
+PASS: created job
+PASS: inserted representative CLOB and JSON content
+PASS: inserted generated document metadata and run status
+PASS: read generated document list
+PASS: cleaned up smoke test records
+```
+
+Do not commit wallet files or local database files. For local SQLite
+development, `AUTO_CREATE_TABLES=true` remains available until migrations are
+fully adopted.
+
+### Model Compatibility Notes
+
+SQLAlchemy models are kept portable between SQLite and Oracle Autonomous
+Database:
+
+- UUID identifiers are stored as `String(36)` values rather than Oracle `RAW`.
+- Short labels, statuses, roles, filenames, and storage keys use explicit
+  `String` lengths.
+- Extracted text, generated text, logs/messages, and serialized JSON metadata
+  use `Text`, which compiles to Oracle `CLOB`.
+- JSON payload columns such as `plan_json`, `draft_json`, `metadata_json`, and
+  `json_content` store JSON strings; the app does not rely on SQLite JSON
+  behavior.
+- Timestamps are generated by the application in UTC. SQLite keeps its normal
+  datetime storage, while Oracle compiles timestamp columns as
+  `TIMESTAMP WITH TIME ZONE`.
+- Table names remain lowercase/snake_case, and model compatibility tests compile
+  Oracle `CREATE TABLE` statements without opening an Oracle connection.
 
 ## File Storage
 

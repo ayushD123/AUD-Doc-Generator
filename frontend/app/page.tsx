@@ -6,6 +6,7 @@ import { FormEvent, useEffect, useState } from "react";
 import BorderGlow from "@/components/BorderGlow";
 import {
   createProject,
+  deleteProject,
   formatProjectDate,
   listProjects,
   type Project,
@@ -35,6 +36,7 @@ export default function Home() {
   const [form, setForm] = useState<ProjectForm>(emptyForm);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   async function refreshProjects() {
@@ -76,6 +78,32 @@ export default function Home() {
       setMessage(`Unable to create project: ${detail}`);
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleDeleteProject(project: Project) {
+    const projectLabel =
+      project.customer_name || project.module_name || project.name || "this project";
+    const confirmed = window.confirm(
+      `Delete ${projectLabel}? This removes the project and its related records.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingProjectId(project.id);
+    setMessage(null);
+
+    try {
+      await deleteProject(project.id);
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      setMessage("Project deleted.");
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "Unknown error.";
+      setMessage(`Unable to delete project: ${detail}`);
+    } finally {
+      setDeletingProjectId(null);
     }
   }
 
@@ -184,27 +212,37 @@ export default function Home() {
                 glowRadius={18}
                 glowIntensity={0.65}
               >
-                <Link href={`/projects/${project.id}`} className="project-row">
-                  <div>
-                    <h3>{project.customer_name || "Unnamed customer"}</h3>
-                    <p>{project.module_name || "No module selected"}</p>
-                  </div>
+                <div className="project-row-shell">
+                  <Link href={`/projects/${project.id}`} className="project-row">
+                    <div>
+                      <h3>{project.customer_name || "Unnamed customer"}</h3>
+                      <p>{project.module_name || "No module selected"}</p>
+                    </div>
 
-                  <dl className="project-meta">
-                    <div>
-                      <dt>Status</dt>
-                      <dd>{project.status}</dd>
-                    </div>
-                    <div>
-                      <dt>Author Name</dt>
-                      <dd>{project.name || "Not available"}</dd>
-                    </div>
-                    <div>
-                      <dt>Created</dt>
-                      <dd>{formatProjectDate(project.created_at)}</dd>
-                    </div>
-                  </dl>
-                </Link>
+                    <dl className="project-meta">
+                      <div>
+                        <dt>Status</dt>
+                        <dd>{project.status}</dd>
+                      </div>
+                      <div>
+                        <dt>Author Name</dt>
+                        <dd>{project.name || "Not available"}</dd>
+                      </div>
+                      <div>
+                        <dt>Created</dt>
+                        <dd>{formatProjectDate(project.created_at)}</dd>
+                      </div>
+                    </dl>
+                  </Link>
+                  <button
+                    type="button"
+                    className="danger-button project-delete-button"
+                    disabled={deletingProjectId === project.id}
+                    onClick={() => void handleDeleteProject(project)}
+                  >
+                    {deletingProjectId === project.id ? "Deleting..." : "Delete"}
+                  </button>
+                </div>
               </BorderGlow>
             ))}
           </div>

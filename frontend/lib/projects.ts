@@ -273,6 +273,20 @@ export function createProject(payload: ProjectCreatePayload) {
   });
 }
 
+export async function deleteProject(projectId: string) {
+  const response = await fetch(`${getApiBaseUrl()}/projects/${projectId}`, {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorBody = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new Error(errorBody?.detail || `Request failed with HTTP ${response.status}.`);
+  }
+}
+
 export function listProjectFiles(projectId: string) {
   return requestJson<UploadedFile[]>(`/projects/${projectId}/files`);
 }

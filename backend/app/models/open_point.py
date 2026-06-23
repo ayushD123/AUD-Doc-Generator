@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, new_uuid, utc_now
+from app.db.types import UTCDateTime
 
 if TYPE_CHECKING:
     from app.models.project import Project
@@ -42,12 +43,12 @@ class OpenPoint(Base):
     source_content_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=False,
         default=utc_now,
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCDateTime,
         nullable=False,
         default=utc_now,
         onupdate=utc_now,

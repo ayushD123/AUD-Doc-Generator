@@ -103,6 +103,30 @@ def test_get_project_returns_404_for_unknown_project(client: TestClient) -> None
     assert response.json()["detail"] == "Project not found."
 
 
+def test_delete_project_removes_project(client: TestClient) -> None:
+    create_response = client.post(
+        "/projects",
+        json={
+            "customer_name": "Vision Operations",
+            "module_name": "Order Management",
+        },
+    )
+    project_id = create_response.json()["id"]
+
+    delete_response = client.delete(f"/projects/{project_id}")
+
+    assert delete_response.status_code == 204
+    get_response = client.get(f"/projects/{project_id}")
+    assert get_response.status_code == 404
+
+
+def test_delete_project_returns_404_for_unknown_project(client: TestClient) -> None:
+    response = client.delete("/projects/missing-project")
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found."
+
+
 def test_create_and_list_project_jobs(client: TestClient) -> None:
     project_response = client.post(
         "/projects",

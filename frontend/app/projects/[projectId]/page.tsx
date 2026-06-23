@@ -402,7 +402,7 @@ function isAudGenerationSuccess(status: string | null | undefined) {
 
 function formatStageLabel(value: string | null | undefined) {
   if (!value) {
-    return "Not started";
+    return "None";
   }
 
   return value
