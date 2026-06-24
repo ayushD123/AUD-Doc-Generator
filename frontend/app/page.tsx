@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
+import { AudacleSelect, type AudacleSelectOption } from "@/components/AudacleSelect";
 import {
   createProject,
   deleteProject,
@@ -32,6 +33,15 @@ type SortOption =
   | "project-desc"
   | "customer-asc"
   | "customer-desc";
+
+const sortOptions: AudacleSelectOption[] = [
+  { value: "newest", label: "Newest first" },
+  { value: "oldest", label: "Oldest first" },
+  { value: "project-asc", label: "Project name A-Z" },
+  { value: "project-desc", label: "Project name Z-A" },
+  { value: "customer-asc", label: "Customer name A-Z" },
+  { value: "customer-desc", label: "Customer name Z-A" },
+];
 
 function optionalValue(value: string) {
   const trimmed = value.trim();
@@ -409,21 +419,17 @@ export default function Home() {
                 />
               </label>
 
-              <label className="toolbar-select">
-                <span className="sr-only">Sort projects</span>
-                <Icon name="sort" />
-                <select
-                  value={sortOption}
-                  onChange={(event) => setSortOption(event.target.value as SortOption)}
-                >
-                  <option value="newest">Newest first</option>
-                  <option value="oldest">Oldest first</option>
-                  <option value="project-asc">Project name A-Z</option>
-                  <option value="project-desc">Project name Z-A</option>
-                  <option value="customer-asc">Customer name A-Z</option>
-                  <option value="customer-desc">Customer name Z-A</option>
-                </select>
-              </label>
+              <AudacleSelect
+                value={sortOption}
+                options={sortOptions.map((option) => ({
+                  ...option,
+                  icon: <Icon name="sort" />,
+                }))}
+                onChange={(nextValue) => setSortOption(nextValue as SortOption)}
+                ariaLabel="Sort projects"
+                className="toolbar-select"
+                compact
+              />
 
               <button
                 type="button"

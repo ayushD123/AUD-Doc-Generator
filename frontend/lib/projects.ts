@@ -207,7 +207,6 @@ export type AUDSectionDraft = {
 
 export const sourceRoles: SourceRole[] = [
   "aud_template",
-  "template_aud",
   "final_aud_sample",
   "fdd",
   "kt_ppt",
