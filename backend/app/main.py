@@ -1,6 +1,10 @@
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 
+from app.core.env import load_environment
+
+load_environment()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

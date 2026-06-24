@@ -1,8 +1,18 @@
 from __future__ import annotations
 
 import json
+import sys
+from pathlib import Path
 from traceback import format_exception_only
 from typing import Any, Callable
+
+BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.core.env import load_environment
+
+load_environment()
 
 from sqlalchemy.orm import Session
 

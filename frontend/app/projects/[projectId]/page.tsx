@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 
-import BorderGlow from "@/components/BorderGlow";
 import {
   formatProjectDate,
   createBuildEvidenceIndexJob,
@@ -1083,70 +1082,63 @@ export default function ProjectDetailPage() {
               <p className="subtitle">{project.module_name || "No module selected"}</p>
             </header>
 
-            <BorderGlow
-              animated
-              className="panel-glow"
-              glowColor="146 58 60"
-              colors={["#2554d8", "#1f7a3a", "#38bdf8"]}
+            <section
+              className="panel final-aud-panel"
+              aria-labelledby="final-aud-title"
             >
-              <section
-                className="panel final-aud-panel"
-                aria-labelledby="final-aud-title"
-              >
-                <div className="section-heading">
-                  <div>
-                    <h2 id="final-aud-title">Final Generated AUD DOCX</h2>
-                    <p className="muted-text">
-                      Download the latest generated AUD document.
-                    </p>
-                  </div>
+              <div className="section-heading">
+                <div>
+                  <h2 id="final-aud-title">Final Generated AUD DOCX</h2>
+                  <p className="muted-text">
+                    Download the latest generated AUD document.
+                  </p>
                 </div>
+              </div>
 
-                <div className="panel-content">
-                  {isAudGenerationSuccess(audGenerationStatus?.status) ? (
-                    <p className="status-message status-success">Final AUD is ready</p>
-                  ) : null}
+              <div className="panel-content">
+                {isAudGenerationSuccess(audGenerationStatus?.status) ? (
+                  <p className="status-message status-success">Final AUD is ready</p>
+                ) : null}
 
-                  {isLoadingGeneratedDocuments ? (
-                    <p className="muted-text">Loading generated documents...</p>
-                  ) : null}
+                {isLoadingGeneratedDocuments ? (
+                  <p className="muted-text">Loading generated documents...</p>
+                ) : null}
 
-                  {!isLoadingGeneratedDocuments && finalGeneratedDocument ? (
-                    <article className="generated-document-row final-document-row">
+                {!isLoadingGeneratedDocuments && finalGeneratedDocument ? (
+                  <article className="generated-document-row final-document-row">
+                    <div>
+                      <h3>{finalGeneratedDocument.filename}</h3>
+                      <p>{finalGeneratedDocument.document_type}</p>
+                    </div>
+
+                    <dl className="generated-document-meta">
                       <div>
-                        <h3>{finalGeneratedDocument.filename}</h3>
-                        <p>{finalGeneratedDocument.document_type}</p>
+                        <dt>Created</dt>
+                        <dd>{formatProjectDate(finalGeneratedDocument.created_at)}</dd>
                       </div>
+                      <div>
+                        <dt>Download</dt>
+                        <dd>
+                          <a
+                            className="download-link"
+                            href={getGeneratedDocumentDownloadUrl(
+                              params.projectId,
+                              finalGeneratedDocument.id,
+                            )}
+                          >
+                            Download DOCX
+                          </a>
+                        </dd>
+                      </div>
+                    </dl>
+                  </article>
+                ) : null}
 
-                      <dl className="generated-document-meta">
-                        <div>
-                          <dt>Created</dt>
-                          <dd>{formatProjectDate(finalGeneratedDocument.created_at)}</dd>
-                        </div>
-                        <div>
-                          <dt>Download</dt>
-                          <dd>
-                            <a
-                              className="download-link"
-                              href={getGeneratedDocumentDownloadUrl(
-                                params.projectId,
-                                finalGeneratedDocument.id,
-                              )}
-                            >
-                              Download DOCX
-                            </a>
-                          </dd>
-                        </div>
-                      </dl>
-                    </article>
-                  ) : null}
-
-                  {!isLoadingGeneratedDocuments && !finalGeneratedDocument ? (
-                    <p className="muted-text">No final AUD generated yet.</p>
-                  ) : null}
-                </div>
-              </section>
-            </BorderGlow>
+                {!isLoadingGeneratedDocuments && !finalGeneratedDocument ? (
+                  <p className="muted-text">No final AUD generated yet.</p>
+                ) : null}
+              </div>
+            </section>
 
             <section className="panel" aria-labelledby="aud-generation-title">
               <div className="section-heading">
