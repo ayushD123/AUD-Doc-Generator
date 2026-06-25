@@ -6,9 +6,27 @@ This repository will evolve into a tool that helps generate Application Understa
 
 ## Current Phase
 
-The current phase is a clean, testable local development application skeleton. It includes the FastAPI/SQLite backend, the Next.js project workspace with collapsible detail sections, local uploads, an optional OCI Object Storage adapter, optional OCI Queue publishing/worker support, optional OCI Speech media transcription, optional OCI Document Understanding enrichment, normalized evidence indexing with read-only frontend review, an optional OCI Generative AI LLM wrapper, AI source summary generation with read-only frontend review, AI-enhanced AUD plan refinement for later drafting, deterministic section evidence packs, AI section draft generation with read-only frontend review, deterministic extraction, source priority reporting, AUD planning, open point extraction, AI Open Points refinement, and rule-based editable DOCX draft output with frontend download controls.
+The current phase is a clean, testable application that still defaults to
+local-first operation. It includes the FastAPI/SQLite backend, the Next.js
+project workspace with collapsible detail sections, local uploads, optional OCI
+adapters for later cloud services, normalized evidence indexing with read-only
+frontend review, source summary and section draft workflows, deterministic
+extraction, source priority reporting, AUD planning, open point extraction,
+AI Open Points refinement, and rule-based editable DOCX draft output with
+frontend download controls.
 
 It intentionally does not include Docker configuration, authentication, Redis, or final LLM-driven DOCX AUD generation.
+
+## Deployment
+
+The recommended first deployment target is a single Ubuntu OCI VM with systemd
+services for the backend API, local worker, and Next.js frontend behind Nginx.
+Use either the SQLite local-first baseline or the Oracle ADB environment profile
+documented in the runbook. Keep local runtime files outside the repository under
+`/var/lib/aud-generator`; keep ADB wallet files outside the repository as well.
+
+Use the step-by-step runbook in
+[docs/deployment-oci-vm.md](docs/deployment-oci-vm.md).
 
 ## Source Priority
 
@@ -20,7 +38,7 @@ When document generation behavior is implemented later, the FDD should be treate
 - Backend: FastAPI with Python
 - Database: local SQLite through SQLAlchemy by default, with optional Oracle Autonomous Database configuration through python-oracledb
 - File storage: local filesystem by default, with an optional OCI Object Storage adapter
-- Async jobs: database-backed job status with local polling by default and optional OCI Queue publishing/worker support
+- Async jobs: database-backed job status with a local worker loop by default and optional OCI Queue publishing/worker support
 
 ## Local Development Goals
 
@@ -28,6 +46,23 @@ When document generation behavior is implemented later, the FDD should be treate
 - Add features iteratively rather than building the full AUD generator at once.
 - Preserve clear boundaries between frontend, backend, documentation, and scripts.
 - Prefer local-only development defaults until cloud integrations are explicitly introduced.
+
+## Local Worker
+
+Run the backend API and the local worker as separate terminals during local
+development. The API creates database-backed jobs, and the worker loop picks
+them up automatically:
+
+```powershell
+cd backend
+python -m app.workers.local_worker --loop
+```
+
+The one-shot command remains available for tests and manual debugging:
+
+```powershell
+python -m app.workers.local_worker
+```
 
 ## Database Configuration
 

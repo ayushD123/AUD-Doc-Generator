@@ -1,3 +1,4 @@
+import argparse
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1288,40 +1289,54 @@ def process_generate_aud_job(
     session.commit()
 
 
-def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
+SUPPORTED_JOB_TYPES = [
+    "classify_files",
+    "extract_transcripts",
+    "transcribe_media",
+    "extract_docx",
+    "extract_pptx",
+    "extract_spreadsheets",
+    "enrich_with_document_understanding",
+    "extract_all",
+    "generate_aud_plan",
+    "build_evidence_index",
+    "generate_source_summaries_ai",
+    "enhance_aud_plan_ai",
+    "build_section_evidence_packs",
+    "generate_section_drafts_ai",
+    "extract_open_points",
+    "refine_open_points_ai",
+    "generate_docx",
+    "generate_aud",
+]
+
+
+def process_pending_jobs(
+    sleep_seconds: float = 0.2,
+    max_jobs: int | None = None,
+) -> int:
+    if sleep_seconds < 0:
+        raise ValueError("sleep_seconds must be 0 or greater.")
+
+    if max_jobs is not None and max_jobs < 1:
+        raise ValueError("max_jobs must be at least 1 when provided.")
+
     create_db_and_tables()
     processed_count = 0
 
     with SessionLocal() as session:
-        pending_jobs = session.scalars(
+        pending_jobs_statement = (
             select(Job)
             .where(
                 Job.status.in_(["pending", "running"]),
-                Job.job_type.in_(
-                    [
-                        "classify_files",
-                        "extract_transcripts",
-                        "transcribe_media",
-                        "extract_docx",
-                        "extract_pptx",
-                        "extract_spreadsheets",
-                        "enrich_with_document_understanding",
-                        "extract_all",
-                        "generate_aud_plan",
-                        "build_evidence_index",
-                        "generate_source_summaries_ai",
-                        "enhance_aud_plan_ai",
-                        "build_section_evidence_packs",
-                        "generate_section_drafts_ai",
-                        "extract_open_points",
-                        "refine_open_points_ai",
-                        "generate_docx",
-                        "generate_aud",
-                    ]
-                ),
+                Job.job_type.in_(SUPPORTED_JOB_TYPES),
             )
             .order_by(Job.created_at.asc())
-        ).all()
+        )
+        if max_jobs is not None:
+            pending_jobs_statement = pending_jobs_statement.limit(max_jobs)
+
+        pending_jobs = session.scalars(pending_jobs_statement).all()
 
         for job in pending_jobs:
             try:
@@ -1427,8 +1442,121 @@ def process_pending_jobs(sleep_seconds: float = 0.2) -> int:
     return processed_count
 
 
-def main() -> None:
-    processed_count = process_pending_jobs()
+def run_worker_loop(
+    poll_interval_seconds: float | None = None,
+    sleep_seconds: float = 0.2,
+    max_iterations: int | None = None,
+    max_jobs: int | None = None,
+) -> int:
+    if sleep_seconds < 0:
+        raise ValueError("sleep_seconds must be 0 or greater.")
+
+    if max_iterations is not None and max_iterations < 1:
+        raise ValueError("max_iterations must be at least 1 when provided.")
+
+    if max_jobs is not None and max_jobs < 1:
+        raise ValueError("max_jobs must be at least 1 when provided.")
+
+    settings = get_settings()
+    resolved_poll_interval = (
+        settings.LOCAL_WORKER_POLL_INTERVAL_SECONDS
+        if poll_interval_seconds is None
+        else poll_interval_seconds
+    )
+    if resolved_poll_interval < 0:
+        raise ValueError("poll_interval_seconds must be 0 or greater.")
+
+    total_processed_count = 0
+    iteration = 0
+
+    while True:
+        iteration += 1
+        processed_count = process_pending_jobs(
+            sleep_seconds=sleep_seconds,
+            max_jobs=max_jobs,
+        )
+        total_processed_count += processed_count
+        print(
+            "Local worker poll "
+            f"{iteration}: processed {processed_count} pending job(s).",
+            flush=True,
+        )
+
+        if max_iterations is not None and iteration >= max_iterations:
+            return total_processed_count
+
+        sleep(resolved_poll_interval)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Process database-backed AUD generation jobs.",
+    )
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="Continuously poll for jobs instead of running one processing pass.",
+    )
+    parser.add_argument(
+        "--poll-interval-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Seconds to wait between loop polls. Defaults to "
+            "LOCAL_WORKER_POLL_INTERVAL_SECONDS."
+        ),
+    )
+    parser.add_argument(
+        "--sleep-seconds",
+        type=float,
+        default=0.2,
+        help="Small delay used inside individual job processors.",
+    )
+    parser.add_argument(
+        "--max-jobs",
+        type=int,
+        default=None,
+        help="Maximum number of queued jobs to process per pass.",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="Testing helper: stop loop mode after this many polls.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = parse_args(argv)
+    try:
+        if args.loop:
+            print("Starting local worker loop. Press Ctrl+C to stop.", flush=True)
+            try:
+                total_processed_count = run_worker_loop(
+                    poll_interval_seconds=args.poll_interval_seconds,
+                    sleep_seconds=args.sleep_seconds,
+                    max_iterations=args.max_iterations,
+                    max_jobs=args.max_jobs,
+                )
+            except KeyboardInterrupt:
+                print("Local worker loop stopped.", flush=True)
+                return
+
+            print(
+                "Local worker loop finished. Processed "
+                f"{total_processed_count} pending job(s).",
+                flush=True,
+            )
+            return
+
+        processed_count = process_pending_jobs(
+            sleep_seconds=args.sleep_seconds,
+            max_jobs=args.max_jobs,
+        )
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
+
     print(f"Processed {processed_count} pending job(s).")
 
 

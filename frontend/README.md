@@ -1,6 +1,6 @@
 # Frontend
 
-Next.js TypeScript frontend skeleton for the Oracle AUD Generator.
+Next.js TypeScript frontend for the Oracle AUD Generator.
 
 This phase includes a minimal App Router setup, project creation, project listing, project detail workspace, collapsible project detail sections, local file upload UI, one-click AUD generation, generation progress polling, extracted content review, read-only evidence index review, read-only source summary review, read-only AI section draft review, and final DOCX download controls that call the backend using `NEXT_PUBLIC_API_BASE_URL`. It does not include authentication, document parsing in the frontend, complex styling, review workflow UI, quality reports, or editing generated AUD content in the browser.
 
@@ -45,6 +45,29 @@ The frontend will be available at:
 http://localhost:3000
 ```
 
+## Ubuntu VM Production Run
+
+On the OCI Ubuntu VM, build the frontend and run it behind Nginx instead of
+using `npm run dev`:
+
+```bash
+cd /opt/aud-generator/frontend
+npm ci
+npm run build
+npm run start -- -H 127.0.0.1 -p 3000
+```
+
+Set `NEXT_PUBLIC_API_BASE_URL` in `.env.production` before building. When Nginx
+routes `/api/` to the backend, use:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=https://<domain>/api
+```
+
+For an HTTP-only first smoke test, use `http://<vm-public-ip-or-domain>/api`.
+Rebuild the frontend after changing this value. The complete VM deployment
+runbook is in [`../docs/deployment-oci-vm.md`](../docs/deployment-oci-vm.md).
+
 ## Manual Test
 
 Start the backend first:
@@ -60,6 +83,14 @@ Then start the frontend:
 ```powershell
 cd ..\frontend
 npm run dev
+```
+
+In a third terminal, start the local backend worker loop and leave it running:
+
+```powershell
+cd ..\backend
+.\.venv\Scripts\Activate.ps1
+python -m app.workers.local_worker --loop
 ```
 
 Open:
@@ -83,7 +114,7 @@ Manual checks:
 - Confirm the Generate AUD button is disabled and shows a generating state.
 - Confirm the AUD Generation panel shows current status, current stage, completed stages, warnings, and any backend error.
 - Confirm the frontend polls `GET /projects/{projectId}/generate-aud/status` every few seconds while the run is not terminal.
-- In a backend terminal, run `python -m app.workers.local_worker`.
+- Confirm the already-running local worker loop processes the queued AUD generation job automatically.
 - Expected result for one-click generation: the run reaches `completed` or `completed_with_warnings`, or shows `failed` with the failed stage and backend error.
 - Confirm polling stops when the status is `completed`, `completed_with_warnings`, or `failed`.
 - When completed or completed with warnings, confirm the page shows `Final AUD is ready`.

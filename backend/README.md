@@ -1,8 +1,17 @@
 # Backend
 
-FastAPI backend skeleton for the Oracle AUD Generator.
+FastAPI backend for the Oracle AUD Generator.
 
-This phase includes a minimal application structure, local settings, a health endpoint, a SQLite-backed SQLAlchemy database foundation, project/job APIs, local file upload metadata, local filesystem storage by default, an optional OCI Object Storage adapter, optional OCI Queue publishing and worker support, optional OCI Speech media transcription, optional OCI Document Understanding enrichment, normalized evidence indexing, an optional OCI Generative AI LLM wrapper, AI source summary generation, AI section draft generation, transcript extraction, DOCX extraction, PPTX extraction, spreadsheet extraction, deterministic AUD planning, open point extraction, AI Open Points refinement, rule-based DOCX draft generation, and pytest coverage. It does not include Redis, authentication, final LLM-driven DOCX AUD generation, template-perfect AUD generation, or Alembic migrations.
+This phase includes local settings, health endpoints, a SQLite-backed
+SQLAlchemy database foundation, initial Alembic migration support, project/job
+APIs, local file upload metadata, local filesystem storage by default, optional
+OCI Object Storage, Queue, Speech, Document Understanding, and Generative AI
+adapters, normalized evidence indexing, AI-assisted source summary and section
+draft workflows, transcript/DOCX/PPTX/spreadsheet extraction, deterministic AUD
+planning, open point extraction, AI Open Points refinement, rule-based DOCX
+draft generation, and pytest coverage. It does not include Redis,
+authentication, final LLM-driven DOCX AUD generation, or template-perfect AUD
+generation.
 
 ## Create a Virtual Environment
 
@@ -53,6 +62,38 @@ Expected response:
   "service": "aud-generator-api"
 }
 ```
+
+## Ubuntu VM Process Model
+
+For an OCI Ubuntu VM, run the backend as a systemd service instead of
+`uvicorn --reload`:
+
+```bash
+cd /opt/aud-generator/backend
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+```
+
+Run the worker as a separate systemd service from the same directory:
+
+```bash
+.venv/bin/python -m app.workers.local_worker --loop
+```
+
+Use `/opt/aud-generator/backend/.env` for backend settings. For the simplest
+SQLite VM deployment, keep:
+
+```text
+DATABASE_URL=sqlite:////var/lib/aud-generator/aud_generator.db
+LOCAL_STORAGE_ROOT=/var/lib/aud-generator/storage
+JOB_QUEUE_BACKEND=local
+STORAGE_BACKEND=local
+```
+
+For an Oracle ADB VM deployment, use `DB_PROVIDER=oracle`, keep `DATABASE_URL`
+blank, set the `ORACLE_DB_*` values, and keep `AUTO_CREATE_TABLES=false`.
+
+The full OCI Ubuntu VM deployment runbook is in
+[`../docs/deployment-oci-vm.md`](../docs/deployment-oci-vm.md).
 
 Database health check:
 
@@ -468,6 +509,7 @@ Local mode is the default:
 
 ```text
 JOB_QUEUE_BACKEND=local
+LOCAL_WORKER_POLL_INTERVAL_SECONDS=5
 ```
 
 Create a file classification job:
@@ -628,10 +670,30 @@ Jobs start as:
 }
 ```
 
-Run the local worker manually from the `backend/` directory:
+For normal local development, start the local worker loop once from the
+`backend/` directory and leave it running in its own terminal:
+
+```powershell
+python -m app.workers.local_worker --loop
+```
+
+The loop polls the database every `LOCAL_WORKER_POLL_INTERVAL_SECONDS` seconds
+and processes queued jobs automatically after the API creates them. Stop it with
+`Ctrl+C`.
+
+The original one-shot worker command remains available for manual debugging and
+tests:
 
 ```powershell
 python -m app.workers.local_worker
+```
+
+Useful local worker options:
+
+```powershell
+python -m app.workers.local_worker --loop --poll-interval-seconds 2
+python -m app.workers.local_worker --loop --max-iterations 1
+python -m app.workers.local_worker --max-jobs 1
 ```
 
 The local worker picks pending jobs from the database and processes:
@@ -660,8 +722,8 @@ The local worker picks pending jobs from the database and processes:
 ## One-Click AUD Generation Pipeline
 
 `POST /projects/{project_id}/generate-aud` creates a queued `generate_aud` job and
-an `AUDGenerationRun` status row. The existing local worker or OCI queue worker
-then runs the full backend pipeline in order:
+an `AUDGenerationRun` status row. In local development, the running local worker
+loop picks up that job automatically and runs the full backend pipeline in order:
 
 ```text
 validate_project_inputs

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     ORACLE_DB_POOL_PRE_PING: bool = True
     STORAGE_BACKEND: str = "local"
     JOB_QUEUE_BACKEND: str = "local"
+    LOCAL_WORKER_POLL_INTERVAL_SECONDS: float = 5.0
     LOCAL_STORAGE_ROOT: str = "storage"
     OCI_BUCKET_NAME: str | None = None
     OCI_NAMESPACE: str | None = None

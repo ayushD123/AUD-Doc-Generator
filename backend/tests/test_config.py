@@ -17,6 +17,7 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     monkeypatch.delenv("ORACLE_DB_MAX_OVERFLOW", raising=False)
     monkeypatch.delenv("ORACLE_DB_POOL_PRE_PING", raising=False)
     monkeypatch.delenv("LOCAL_STORAGE_ROOT", raising=False)
+    monkeypatch.delenv("LOCAL_WORKER_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("MAX_SPREADSHEET_ROWS_PER_SHEET", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("OCI_GENAI_REGION", raising=False)
@@ -61,6 +62,7 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     assert settings.ORACLE_DB_POOL_PRE_PING is True
     assert settings.LOCAL_STORAGE_ROOT == "storage"
     assert settings.JOB_QUEUE_BACKEND == "local"
+    assert settings.LOCAL_WORKER_POLL_INTERVAL_SECONDS == 5.0
     assert settings.OCI_SPEECH_OUTPUT_PREFIX == "projects/{project_id}/speech/"
     assert settings.OCI_SPEECH_MODEL_TYPE == "WHISPER_MEDIUM"
     assert settings.OCI_SPEECH_LANGUAGE_CODE == "en"
@@ -105,6 +107,7 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("ORACLE_DB_POOL_PRE_PING", "false")
     monkeypatch.setenv("LOCAL_STORAGE_ROOT", "./test_storage")
     monkeypatch.setenv("JOB_QUEUE_BACKEND", "oci")
+    monkeypatch.setenv("LOCAL_WORKER_POLL_INTERVAL_SECONDS", "1.5")
     monkeypatch.setenv("OCI_SPEECH_OUTPUT_PREFIX", "speech/{project_id}/")
     monkeypatch.setenv("OCI_SPEECH_MODEL_TYPE", "ORACLE")
     monkeypatch.setenv("OCI_SPEECH_LANGUAGE_CODE", "en-US")
@@ -151,6 +154,7 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     assert settings.ORACLE_DB_POOL_PRE_PING is False
     assert settings.LOCAL_STORAGE_ROOT == "./test_storage"
     assert settings.JOB_QUEUE_BACKEND == "oci"
+    assert settings.LOCAL_WORKER_POLL_INTERVAL_SECONDS == 1.5
     assert settings.OCI_SPEECH_OUTPUT_PREFIX == "speech/{project_id}/"
     assert settings.OCI_SPEECH_MODEL_TYPE == "ORACLE"
     assert settings.OCI_SPEECH_LANGUAGE_CODE == "en-US"
