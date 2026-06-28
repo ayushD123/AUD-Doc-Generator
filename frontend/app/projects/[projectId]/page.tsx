@@ -106,7 +106,6 @@ function Icon({
 }: {
   name:
     | "arrow-left"
-    | "building"
     | "calendar"
     | "chevron-down"
     | "chevron-up"
@@ -124,12 +123,6 @@ function Icon({
 }) {
   const paths = {
     "arrow-left": <path d="M19 12H5M12 19l-7-7 7-7" />,
-    building: (
-      <>
-        <path d="M4.5 20.5V5.2c0-.9.7-1.7 1.7-1.7h11.6c.9 0 1.7.8 1.7 1.7v15.3" />
-        <path d="M8.5 20.5v-4h7v4M8.5 8h2M13.5 8h2M8.5 12h2M13.5 12h2" />
-      </>
-    ),
     calendar: (
       <>
         <path d="M7 3v3M17 3v3M4.5 8.2h15" />
@@ -1822,6 +1815,7 @@ export default function ProjectDetailPage() {
           ? "running"
           : "pending";
   const isFinalAudReady = isAudGenerationSuccess(audGenerationStatus?.status);
+  const finalAudPanelTone = isFinalAudReady ? "ready" : "draft";
   const projectHeaderStatusLabel = isFinalAudReady
     ? "Ready"
     : project?.status || "Draft";
@@ -1898,9 +1892,7 @@ export default function ProjectDetailPage() {
                 </Link>
 
                 <div className="project-identity">
-                  <span className="project-identity-icon" aria-hidden="true">
-                    <Icon name="building" />
-                  </span>
+                  <span className="project-identity-icon" aria-hidden="true" />
                   <div className="project-title-stack">
                     <h1 id="project-title">
                       {project.customer_name || "Unnamed customer"}
@@ -2055,7 +2047,7 @@ export default function ProjectDetailPage() {
             </section>
 
             <section
-              className="panel final-aud-panel"
+              className={`panel final-aud-panel final-aud-panel-${finalAudPanelTone}`}
               aria-labelledby="final-aud-title"
             >
               <div className="section-heading">

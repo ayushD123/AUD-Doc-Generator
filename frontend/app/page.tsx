@@ -53,7 +53,6 @@ function Icon({
   className,
 }: {
   name:
-    | "book"
     | "plus"
     | "folder"
     | "search"
@@ -64,16 +63,6 @@ function Icon({
     | "moon";
   className?: string;
 }) {
-  if (name === "book") {
-    return (
-      <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M4.5 5.2c0-.9.7-1.6 1.6-1.6h4.2c1 0 1.9.4 2.7 1.1v15.7c-.8-.7-1.7-1.1-2.7-1.1H5.7c-.7 0-1.2-.5-1.2-1.2Z" />
-        <path d="M19.5 5.2c0-.9-.7-1.6-1.6-1.6h-4.2c-1 0-1.9.4-2.7 1.1v15.7c.8-.7 1.7-1.1 2.7-1.1h4.6c.7 0 1.2-.5 1.2-1.2Z" />
-        <path d="M7.5 8h2.6M7.5 11h2.6M15 8h2M15 11h2" />
-      </svg>
-    );
-  }
-
   const paths = {
     plus: <path d="M12 5v14M5 12h14" />,
     folder: (
@@ -90,7 +79,6 @@ function Icon({
       </>
     ),
     moon: <path d="M20.2 14.3A7.6 7.6 0 0 1 9.7 3.8 8.2 8.2 0 1 0 20.2 14.3Z" />,
-    book: null,
   };
 
   return (
@@ -263,9 +251,7 @@ export default function Home() {
       <header className="dashboard-header">
         <div className="dashboard-header-inner">
           <div className="brand-lockup">
-            <span className="brand-icon">
-              <Icon name="book" />
-            </span>
+            <span className="brand-icon" aria-hidden="true" />
             <h1 id="app-title" className="brand-title">
               AUD<span>acle</span>
             </h1>

@@ -1545,14 +1545,26 @@ html[data-theme="dark"] .audacle-dashboard .generated-document-meta dd {
   color: var(--dashboard-text);
 }
 
-.audacle-dashboard[data-theme="dark"] .final-aud-panel,
-html[data-theme="dark"] .audacle-dashboard .final-aud-panel {
+.audacle-dashboard[data-theme="dark"] .final-aud-panel-draft,
+html[data-theme="dark"] .audacle-dashboard .final-aud-panel-draft {
+  border-color: rgba(239, 68, 68, 0.3);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(127, 29, 29, 0.2));
+}
+
+.audacle-dashboard[data-theme="dark"] .final-aud-panel-ready,
+html[data-theme="dark"] .audacle-dashboard .final-aud-panel-ready {
   border-color: rgba(34, 197, 94, 0.28);
   background: linear-gradient(180deg, rgba(15, 23, 42, 0.94), rgba(20, 83, 45, 0.18));
 }
 
-.audacle-dashboard[data-theme="dark"] .final-document-row,
-html[data-theme="dark"] .audacle-dashboard .final-document-row {
+.audacle-dashboard[data-theme="dark"] .final-aud-panel-draft .final-document-row,
+html[data-theme="dark"] .audacle-dashboard .final-aud-panel-draft .final-document-row {
+  border-color: rgba(239, 68, 68, 0.26);
+  background: rgba(15, 23, 42, 0.76);
+}
+
+.audacle-dashboard[data-theme="dark"] .final-aud-panel-ready .final-document-row,
+html[data-theme="dark"] .audacle-dashboard .final-aud-panel-ready .final-document-row {
   border-color: rgba(34, 197, 94, 0.28);
   background: rgba(15, 23, 42, 0.76);
 }
@@ -2011,14 +2023,30 @@ html[data-theme="dark"] .file-type-badge-media {
   grid-template-columns: minmax(0, 1fr) minmax(240px, 0.7fr);
 }
 
-.final-aud-panel {
+.final-aud-panel-draft {
+  border-color: color-mix(in srgb, var(--error) 32%, var(--border));
+  background: linear-gradient(
+    180deg,
+    var(--surface) 0%,
+    color-mix(in srgb, var(--error) 7%, var(--surface)) 100%
+  );
+}
+
+.final-aud-panel-ready {
   border-color: color-mix(in srgb, var(--success) 32%, var(--border));
   background: linear-gradient(180deg, var(--surface) 0%, var(--success-surface) 100%);
 }
 
 .final-document-row {
-  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
   background: var(--surface);
+}
+
+.final-aud-panel-draft .final-document-row {
+  border-color: color-mix(in srgb, var(--error) 24%, var(--border));
+}
+
+.final-aud-panel-ready .final-document-row {
+  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
 }
 
 .generate-aud-button {
@@ -3105,19 +3133,12 @@ dd {
 }
 
 .project-identity-icon {
-  width: 102px;
-  height: 102px;
+  width: 86px;
+  height: 86px;
   display: grid;
   flex: 0 0 auto;
   place-items: center;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #eff6ff 0%, #e8f0ff 100%);
-  color: #2563eb;
-}
-
-.project-identity-icon svg {
-  width: 48px;
-  height: 48px;
+  background: url("../media/icons/oracle-logo.svg") center / contain no-repeat;
 }
 
 .project-title-stack {
@@ -3391,7 +3412,6 @@ dd {
   color: #60a5fa;
 }
 
-.project-detail-page[data-theme="dark"] .project-identity-icon,
 .project-detail-page[data-theme="dark"] .project-details-icon,
 .project-detail-page[data-theme="dark"] .project-detail-icon {
   background: rgba(37, 99, 235, 0.14);
@@ -3503,9 +3523,9 @@ dd {
 }
 
 .brand-icon {
-  width: 38px;
-  height: 38px;
-  color: var(--dashboard-accent);
+  width: 34px;
+  height: 34px;
+  background: url("../media/icons/oracle-logo.svg") center / contain no-repeat;
 }
 
 .brand-icon svg,
@@ -4537,14 +4557,8 @@ dd {
   }
 
   .project-identity-icon {
-    width: 70px;
-    height: 70px;
-    border-radius: 16px;
-  }
-
-  .project-identity-icon svg {
-    width: 34px;
-    height: 34px;
+    width: 58px;
+    height: 58px;
   }
 
   .project-title-stack h1 {
@@ -4604,8 +4618,8 @@ dd {
   }
 
   .brand-icon {
-    width: 32px;
-    height: 32px;
+    width: 30px;
+    height: 30px;
   }
 
   .header-divider,

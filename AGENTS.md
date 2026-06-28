@@ -17,17 +17,7 @@ Check for:
 6. anything that will make future OCI migration difficult
 Re-run and check health everytime, if there's any error in terminal, fix it automatically
 
-## Current Boundaries
 
-Do not add these until explicitly requested:
-
-- OCI integration
-- LLM calls
-- Redis
-- Authentication
-- Document extraction
-- Docker files
-- Dependency installation
 
 ## Target Architecture
 
