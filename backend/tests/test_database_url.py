@@ -12,7 +12,7 @@ from app.core.database_url import (
 
 
 def test_sqlite_url_remains_default() -> None:
-    settings = Settings(_env_file=None)
+    settings = Settings(DB_PROVIDER="sqlite", DATABASE_URL=None, _env_file=None)
 
     config = build_database_engine_config(settings)
 
@@ -89,7 +89,10 @@ def test_oracle_logging_hides_password(caplog: pytest.LogCaptureFixture) -> None
 def test_missing_required_oracle_settings_raise_clear_error() -> None:
     settings = Settings(
         DB_PROVIDER="oracle",
+        DATABASE_URL=None,
         ORACLE_DB_USER="aud_user",
+        ORACLE_DB_PASSWORD=None,
+        ORACLE_DB_DSN=None,
         _env_file=None,
     )
 

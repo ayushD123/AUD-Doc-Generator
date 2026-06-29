@@ -249,6 +249,7 @@ class AUDPipelineOrchestrator:
                 message = json.dumps(
                     {
                         "status_message": message,
+                        "notify_aud_ready": False,
                         "options": {
                             "use_ai_drafts": True,
                             "include_draft_sections": True,
@@ -322,6 +323,8 @@ class AUDPipelineOrchestrator:
         )
 
     def finalize_artifact(self) -> None:
+        from app.services.email_notification import notify_aud_ready_for_document
+
         generated_document = self.session.scalars(
             select(GeneratedDocument)
             .where(GeneratedDocument.project_id == self.generation_run.project_id)
@@ -333,6 +336,11 @@ class AUDPipelineOrchestrator:
 
         self.generation_run.final_document_id = generated_document.id
         self.session.commit()
+        notify_aud_ready_for_document(
+            self.session,
+            self.generation_run.project_id,
+            generated_document,
+        )
 
     def list_uploaded_files(self) -> list[UploadedFile]:
         return list(

@@ -11,7 +11,8 @@ draft workflows, transcript/DOCX/PPTX/spreadsheet extraction, deterministic AUD
 planning, open point extraction, AI Open Points refinement, rule-based DOCX
 draft generation, and pytest coverage. It does not include Redis,
 authentication, final LLM-driven DOCX AUD generation, or template-perfect AUD
-generation.
+generation. When a project includes an Email Id, the worker sends an AUD-ready
+email notification after the generated DOCX artifact is available.
 
 ## Create a Virtual Environment
 
@@ -676,6 +677,11 @@ For normal local development, start the local worker loop once from the
 ```powershell
 python -m app.workers.local_worker --loop
 ```
+
+The local worker loads `backend/.env` before polling jobs. If OCI Object Storage
+or other OCI SDK calls require a corporate proxy, put `HTTP_PROXY`,
+`HTTPS_PROXY`, and `NO_PROXY` in `backend/.env` so worker-side downloads use the
+same network path as API-side uploads.
 
 The loop polls the database every `LOCAL_WORKER_POLL_INTERVAL_SECONDS` seconds
 and processes queued jobs automatically after the API creates them. Stop it with
@@ -1586,6 +1592,57 @@ Expected results:
 - If an earlier AUD plan was generated before extraction or before FDD content was available, the DOCX job refreshes the plan so extracted FDD/PPT sections can appear and FDD can win.
 - No LLM call, OCR, image interpretation, or template-perfect formatting is used during DOCX generation.
 
+## AUD-Ready Email Notifications
+
+After a DOCX generation job reaches `completed`, the backend attempts to notify
+the project's `email_id` using the configured POST endpoint. The notification
+payload is built from the project metadata captured on the home page:
+
+- `to_email`: project Email Id
+- `name`: project Author Name, stored as `Project.name`
+- `customer_name`: project Customer Name
+- `module_name`: project Module Name
+
+Default settings:
+
+```text
+EMAIL_NOTIFICATIONS_ENABLED=true
+EMAIL_NOTIFICATION_URL=https://apex.oraclecorp.com/pls/apex/basic_learning_01/apka/send-email
+EMAIL_NOTIFICATION_FROM=audacle@oracle.com
+EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL=
+EMAIL_NOTIFICATION_TIMEOUT_SECONDS=10
+EMAIL_NOTIFICATION_VERIFY_SSL=true
+EMAIL_NOTIFICATION_TRUST_ENV=true
+EMAIL_NOTIFICATION_CA_BUNDLE=
+```
+
+Set `EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL` to the public backend/API base URL to
+include a DOCX download link in the notification email. The generated URL uses
+the backend route
+`/projects/{project_id}/generated-documents/{document_id}/download`, so it works
+with either local filesystem storage or OCI Object Storage. For local testing,
+use `http://127.0.0.1:8000`. For the VM Nginx layout where backend routes live
+under `/api`, use `https://<domain-or-vm-ip>/api`.
+
+Email delivery is best effort. If the endpoint is unavailable or returns an
+error, the worker logs the backend error and keeps the normal AUD generation
+flow unchanged. A successful notification is recorded in generated document
+metadata to avoid duplicate sends when the one-click pipeline finalizes the same
+artifact.
+
+If the worker is running on VPN through a corporate proxy and logs
+`CERTIFICATE_VERIFY_FAILED`, keep `EMAIL_NOTIFICATION_VERIFY_SSL=true` and set
+`EMAIL_NOTIFICATION_CA_BUNDLE` to a PEM bundle containing the corporate proxy or
+root CA certificate. For local troubleshooting only, set
+`EMAIL_NOTIFICATION_VERIFY_SSL=false` to bypass TLS verification for this email
+POST call.
+
+If the email endpoint returns `502 notresolvable` while Object Storage still
+works through the proxy, the proxy cannot resolve the internal APEX host. Set
+`EMAIL_NOTIFICATION_TRUST_ENV=false` so the email POST ignores `HTTP_PROXY` and
+uses the direct VPN route. This setting applies only to the email notification
+HTTP client.
+
 ## OCI Generative AI LLM Wrapper
 
 The backend has an optional LLM service wrapper for later AUD planning,
@@ -1643,6 +1700,12 @@ Some OCI Generative AI models, including newer GPT-style models, only accept the
 default temperature value. Keep `OCI_GENAI_TEMPERATURE=1` for those models. The
 classic SDK wrapper retries once with the default temperature if OCI rejects a
 custom temperature value.
+
+In classic SDK mode, some models expect the output token limit as `maxTokens`
+instead of `maxCompletionTokens`. The wrapper uses `maxTokens` automatically for
+`meta.llama-4...` model IDs such as Llama 4 Maverick, and falls back from
+`maxCompletionTokens` to `maxTokens` once if OCI returns the unsupported
+parameter error for an opaque model OCID.
 
 AI-enhanced AUD plan output is larger than source-summary output because it
 returns section mapping JSON. If OCI returns `finish_reason=length`, increase

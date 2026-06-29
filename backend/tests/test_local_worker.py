@@ -198,21 +198,29 @@ def test_run_worker_loop_polls_until_max_iterations(monkeypatch) -> None:
 
 def test_main_runs_one_processing_pass_by_default(monkeypatch, capsys) -> None:
     calls: list[tuple[float, int | None]] = []
+    environment_calls: list[str] = []
 
     def fake_process_pending_jobs(sleep_seconds=0.2, max_jobs=None) -> int:
         calls.append((sleep_seconds, max_jobs))
         return 3
 
+    monkeypatch.setattr(
+        local_worker,
+        "load_environment",
+        lambda: environment_calls.append("loaded"),
+    )
     monkeypatch.setattr(local_worker, "process_pending_jobs", fake_process_pending_jobs)
 
     local_worker.main([])
 
+    assert environment_calls == ["loaded"]
     assert calls == [(0.2, None)]
     assert "Processed 3 pending job(s)." in capsys.readouterr().out
 
 
 def test_main_runs_loop_when_requested(monkeypatch, capsys) -> None:
     calls: list[dict[str, float | int | None]] = []
+    environment_calls: list[str] = []
 
     def fake_run_worker_loop(
         poll_interval_seconds=None,
@@ -230,6 +238,11 @@ def test_main_runs_loop_when_requested(monkeypatch, capsys) -> None:
         )
         return 4
 
+    monkeypatch.setattr(
+        local_worker,
+        "load_environment",
+        lambda: environment_calls.append("loaded"),
+    )
     monkeypatch.setattr(local_worker, "run_worker_loop", fake_run_worker_loop)
 
     local_worker.main(
@@ -246,6 +259,7 @@ def test_main_runs_loop_when_requested(monkeypatch, capsys) -> None:
         ]
     )
 
+    assert environment_calls == ["loaded"]
     assert calls == [
         {
             "poll_interval_seconds": 0.25,
@@ -259,7 +273,9 @@ def test_main_runs_loop_when_requested(monkeypatch, capsys) -> None:
     assert "Processed 4 pending job(s)" in output
 
 
-def test_main_exits_cleanly_for_invalid_worker_options() -> None:
+def test_main_exits_cleanly_for_invalid_worker_options(monkeypatch) -> None:
+    monkeypatch.setattr(local_worker, "load_environment", lambda: None)
+
     try:
         local_worker.main(["--max-jobs", "0"])
     except SystemExit as error:

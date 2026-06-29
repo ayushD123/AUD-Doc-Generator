@@ -729,7 +729,7 @@ function getAudGenerationModalSubtitle(status: string | null | undefined) {
     return "AUD generation stopped before completion. Review the failed stage and error details below.";
   }
 
-  return "We are generating your AUD document. You can close this window and continue working while the pipeline runs.";
+  return "We’re generating your AUD and will notify you by email when it’s complete";
 }
 
 function getAudGenerationSummary(status: AUDGenerationStatus | null) {
@@ -1109,7 +1109,7 @@ function AudGenerationProgressModal({
               ? "Generation failed. Review the error details or check Jobs / Debug Information."
               : isTerminal
                 ? "Generation completed. Review the final document section for download."
-                : "This may take a few minutes. You can safely close this window."}
+                : "This may take a few minutes. You can safely close this window and continue working."}
           </p>
           <button type="button" className="secondary-button" onClick={onClose}>
             Close

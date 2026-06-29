@@ -9,6 +9,7 @@ from traceback import format_exception_only
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.env import load_environment
 from app.core.config import get_settings
 from app.db.session import SessionLocal, create_db_and_tables
 from app.models import ExtractedContent, Job, UploadedFile
@@ -1152,14 +1153,32 @@ def process_refine_open_points_ai_job(
     session.commit()
 
 
+def should_notify_aud_ready_after_docx_job(value: str | None) -> bool:
+    if not value:
+        return True
+
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError:
+        return True
+
+    if not isinstance(payload, dict):
+        return True
+
+    notify_value = payload.get("notify_aud_ready")
+    return notify_value if isinstance(notify_value, bool) else True
+
+
 def process_generate_docx_job(
     session: Session,
     job: Job,
     sleep_seconds: float = 0.2,
 ) -> None:
     from app.services.docx_generation import generate_docx, parse_docx_generation_options
+    from app.services.email_notification import notify_aud_ready_for_document
 
     options = parse_docx_generation_options(job.message)
+    notify_aud_ready = should_notify_aud_ready_after_docx_job(job.message)
     job.status = "running"
     job.progress = 10
     job.message = "Generating DOCX draft."
@@ -1179,6 +1198,8 @@ def process_generate_docx_job(
     job.progress = 100
     job.message = f"Generated DOCX document {generated_document.id}."
     session.commit()
+    if notify_aud_ready:
+        notify_aud_ready_for_document(session, job.project_id, generated_document)
 
 
 def process_generate_aud_job(
@@ -1528,6 +1549,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> None:
+    load_environment()
     args = parse_args(argv)
     try:
         if args.loop:

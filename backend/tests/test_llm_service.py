@@ -6,7 +6,11 @@ from app.core.config import Settings
 from app.services.llm import LLMError, LLMInputTooLongError, LLMInvalidJSONError
 from app.services.llm.json_utils import parse_json_response, strip_markdown_json_fence
 from app.services.llm.noop import NoOpLLMService
-from app.services.llm.oci_genai_classic import OCIGenAIClassicLLMService
+from app.services.llm.oci_genai_classic import (
+    MAX_COMPLETION_TOKENS_FIELD,
+    MAX_TOKENS_FIELD,
+    OCIGenAIClassicLLMService,
+)
 from app.services.llm.oci_responses import OCIResponsesLLMService
 
 
@@ -217,6 +221,69 @@ def test_oci_classic_extracts_direct_output_text() -> None:
     )
 
     assert service._extract_chat_text(response) == '{"status":"ok"}'
+
+
+def test_oci_classic_uses_max_tokens_for_llama4_model_ids() -> None:
+    service = OCIGenAIClassicLLMService(
+        settings=Settings(
+            OCI_GENAI_MODEL_ID="meta.llama-4-maverick-17b-128e-instruct-fp8",
+            OCI_GENAI_MAX_OUTPUT_TOKENS=1234,
+            _env_file=None,
+        ),
+        client=object(),
+    )
+    request = SimpleNamespace()
+
+    service._set_output_token_limit(
+        chat_request=request,
+        token_limit=service.settings.OCI_GENAI_MAX_OUTPUT_TOKENS,
+        output_token_limit_field=service._output_token_limit_field,
+    )
+
+    assert service._output_token_limit_field == MAX_TOKENS_FIELD
+    assert request.max_tokens == 1234
+    assert not hasattr(request, "max_completion_tokens")
+
+
+def test_oci_classic_retries_with_max_tokens_when_model_rejects_max_completion_tokens() -> None:
+    class FakeClient:
+        def __init__(self) -> None:
+            self.chat_details: list[SimpleNamespace] = []
+
+        def chat(self, chat_detail: SimpleNamespace) -> SimpleNamespace:
+            self.chat_details.append(chat_detail)
+            if chat_detail.output_token_limit_field == MAX_COMPLETION_TOKENS_FIELD:
+                raise RuntimeError(
+                    "Invalid 'maxCompletionTokens': Unsupported parameter: "
+                    "'maxCompletionTokens' is not supported with this model. "
+                    "Use 'maxTokens' instead."
+                )
+
+            return SimpleNamespace(
+                data=SimpleNamespace(
+                    chat_response=SimpleNamespace(output_text='{"status":"ok"}')
+                )
+            )
+
+    client = FakeClient()
+    service = OCIGenAIClassicLLMService(
+        settings=Settings(
+            OCI_GENAI_MODEL_ID="ocid1.generativeaimodel.oc1..opaque",
+            OCI_GENAI_MAX_INPUT_CHARS=1000,
+            _env_file=None,
+        ),
+        client=client,
+    )
+    service._build_chat_detail = lambda **kwargs: SimpleNamespace(**kwargs)  # type: ignore[method-assign]
+
+    assert service.generate_text("hello") == '{"status":"ok"}'
+    assert [
+        detail.output_token_limit_field for detail in client.chat_details
+    ] == [
+        MAX_COMPLETION_TOKENS_FIELD,
+        MAX_TOKENS_FIELD,
+    ]
+    assert service._output_token_limit_field == MAX_TOKENS_FIELD
 
 
 def test_oci_classic_retries_with_default_temperature_when_model_rejects_custom_value() -> None:

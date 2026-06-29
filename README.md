@@ -13,7 +13,10 @@ adapters for later cloud services, normalized evidence indexing with read-only
 frontend review, source summary and section draft workflows, deterministic
 extraction, source priority reporting, AUD planning, open point extraction,
 AI Open Points refinement, and rule-based editable DOCX draft output with
-frontend download controls.
+frontend download controls. When a project includes an Email Id, the backend
+also sends an AUD-ready notification after the generated DOCX is available, with
+an optional backend download link when `EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL` is
+configured.
 
 It intentionally does not include Docker configuration, authentication, Redis, or final LLM-driven DOCX AUD generation.
 
@@ -103,6 +106,11 @@ summary prompts after wrapper text is added.
 
 For OCI GPT-style models that only support the default model temperature, keep
 `OCI_GENAI_TEMPERATURE=1`.
+
+In classic OCI SDK mode, the wrapper uses `maxTokens` automatically for
+`meta.llama-4...` model IDs such as Llama 4 Maverick. For opaque model OCIDs,
+it falls back from `maxCompletionTokens` to `maxTokens` if OCI returns the
+unsupported-parameter error.
 
 Both OCI LLM provider wrappers retry transient throttling errors such as HTTP
 429 with exponential backoff. Tune `OCI_GENAI_RETRY_MAX_ATTEMPTS`,

@@ -19,6 +19,13 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     monkeypatch.delenv("LOCAL_STORAGE_ROOT", raising=False)
     monkeypatch.delenv("LOCAL_WORKER_POLL_INTERVAL_SECONDS", raising=False)
     monkeypatch.delenv("MAX_SPREADSHEET_ROWS_PER_SHEET", raising=False)
+    monkeypatch.delenv("DOCUMENT_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("OCI_DOCUMENT_OUTPUT_PREFIX", raising=False)
+    monkeypatch.delenv("OCI_DOCUMENT_ENABLE_DOCX", raising=False)
+    monkeypatch.delenv("OCI_DOCUMENT_ENABLE_PPTX", raising=False)
+    monkeypatch.delenv("OCI_DOCUMENT_ENABLE_XLSX", raising=False)
+    monkeypatch.delenv("OCI_DOCUMENT_ENABLE_PDF", raising=False)
+    monkeypatch.delenv("OCI_DOCUMENT_ENABLE_IMAGES", raising=False)
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("OCI_GENAI_REGION", raising=False)
     monkeypatch.delenv("OCI_GENAI_PROJECT_OCID", raising=False)
@@ -36,6 +43,14 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
     monkeypatch.delenv("REQUIRE_LLM_ENHANCED_OPEN_POINTS", raising=False)
     monkeypatch.delenv("ALLOW_RAW_OPEN_POINTS_FALLBACK", raising=False)
     monkeypatch.delenv("DEFAULT_AUD_TEMPLATE_PATH", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATIONS_ENABLED", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATION_URL", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATION_FROM", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATION_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATION_VERIFY_SSL", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATION_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("EMAIL_NOTIFICATION_TRUST_ENV", raising=False)
     monkeypatch.setenv("LLM_PROVIDER", "none")
     monkeypatch.setenv("OCI_GENAI_MAX_INPUT_CHARS", "200000")
     monkeypatch.setenv("OCI_GENAI_TIMEOUT_SECONDS", "120")
@@ -88,6 +103,16 @@ def test_settings_use_local_defaults(monkeypatch) -> None:
         "/backend/template/AUD_Editable_Template.docx"
     )
     assert settings.MAX_SPREADSHEET_ROWS_PER_SHEET == 200
+    assert settings.EMAIL_NOTIFICATIONS_ENABLED is True
+    assert settings.EMAIL_NOTIFICATION_URL == (
+        "https://apex.oraclecorp.com/pls/apex/basic_learning_01/apka/send-email"
+    )
+    assert settings.EMAIL_NOTIFICATION_FROM == "audacle@oracle.com"
+    assert settings.EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL is None
+    assert settings.EMAIL_NOTIFICATION_TIMEOUT_SECONDS == 10.0
+    assert settings.EMAIL_NOTIFICATION_VERIFY_SSL is True
+    assert settings.EMAIL_NOTIFICATION_CA_BUNDLE is None
+    assert settings.EMAIL_NOTIFICATION_TRUST_ENV is True
 
 
 def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
@@ -134,6 +159,17 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("ALLOW_RAW_OPEN_POINTS_FALLBACK", "false")
     monkeypatch.setenv("DEFAULT_AUD_TEMPLATE_PATH", "/custom/template.docx")
     monkeypatch.setenv("MAX_SPREADSHEET_ROWS_PER_SHEET", "25")
+    monkeypatch.setenv("EMAIL_NOTIFICATIONS_ENABLED", "false")
+    monkeypatch.setenv("EMAIL_NOTIFICATION_URL", "https://example.test/email")
+    monkeypatch.setenv("EMAIL_NOTIFICATION_FROM", "custom@oracle.com")
+    monkeypatch.setenv(
+        "EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL",
+        "https://aud.example.com/api",
+    )
+    monkeypatch.setenv("EMAIL_NOTIFICATION_TIMEOUT_SECONDS", "2.5")
+    monkeypatch.setenv("EMAIL_NOTIFICATION_VERIFY_SSL", "false")
+    monkeypatch.setenv("EMAIL_NOTIFICATION_CA_BUNDLE", "C:/certs/oracle-ca.pem")
+    monkeypatch.setenv("EMAIL_NOTIFICATION_TRUST_ENV", "false")
 
     settings = Settings(_env_file=None)
 
@@ -181,6 +217,16 @@ def test_settings_can_be_overridden_from_environment(monkeypatch) -> None:
     assert settings.ALLOW_RAW_OPEN_POINTS_FALLBACK is False
     assert settings.DEFAULT_AUD_TEMPLATE_PATH == "/custom/template.docx"
     assert settings.MAX_SPREADSHEET_ROWS_PER_SHEET == 25
+    assert settings.EMAIL_NOTIFICATIONS_ENABLED is False
+    assert settings.EMAIL_NOTIFICATION_URL == "https://example.test/email"
+    assert settings.EMAIL_NOTIFICATION_FROM == "custom@oracle.com"
+    assert settings.EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL == (
+        "https://aud.example.com/api"
+    )
+    assert settings.EMAIL_NOTIFICATION_TIMEOUT_SECONDS == 2.5
+    assert settings.EMAIL_NOTIFICATION_VERIFY_SSL is False
+    assert settings.EMAIL_NOTIFICATION_CA_BUNDLE == "C:/certs/oracle-ca.pem"
+    assert settings.EMAIL_NOTIFICATION_TRUST_ENV is False
 
 
 def test_settings_accept_common_false_typo_for_document_flags(monkeypatch) -> None:
@@ -191,7 +237,9 @@ def test_settings_accept_common_false_typo_for_document_flags(monkeypatch) -> No
     assert settings.OCI_DOCUMENT_ENABLE_DOCX is False
 
 
-def test_auto_create_tables_defaults_false_for_oracle() -> None:
+def test_auto_create_tables_defaults_false_for_oracle(monkeypatch) -> None:
+    monkeypatch.delenv("AUTO_CREATE_TABLES", raising=False)
+
     settings = Settings(DB_PROVIDER="oracle", _env_file=None)
 
     assert settings.AUTO_CREATE_TABLES is None

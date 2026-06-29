@@ -15,6 +15,9 @@ from app.services.llm.base import (
 from app.services.llm.json_utils import parse_json_response
 from app.services.llm.prompts import build_json_system_prompt
 
+MAX_TOKENS_FIELD = "max_tokens"
+MAX_COMPLETION_TOKENS_FIELD = "max_completion_tokens"
+
 
 class OCIGenAIClassicLLMService(LLMService):
     provider_name = "oci_genai_classic"
@@ -27,6 +30,7 @@ class OCIGenAIClassicLLMService(LLMService):
         self.settings = settings or get_settings()
         self.client = client or self.build_client()
         self._sleep = sleep
+        self._output_token_limit_field = self._initial_output_token_limit_field()
 
     def build_client(self) -> Any:
         self._require_setting("OCI_GENAI_REGION", self.settings.OCI_GENAI_REGION)
@@ -115,16 +119,31 @@ class OCIGenAIClassicLLMService(LLMService):
         attempts = positive_attempt_count(self.settings.OCI_GENAI_RETRY_MAX_ATTEMPTS)
         effective_temperature = temperature
         attempt_index = 0
+        token_limit_fields_tried: set[str] = set()
 
         while attempt_index < attempts:
+            output_token_limit_field = self._output_token_limit_field
+            token_limit_fields_tried.add(output_token_limit_field)
             chat_detail = self._build_chat_detail(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=effective_temperature,
+                output_token_limit_field=output_token_limit_field,
             )
             try:
                 return self.client.chat(chat_detail)
             except Exception as error:
+                token_limit_fallback = self._token_limit_fallback_for_error(
+                    error,
+                    current_field=output_token_limit_field,
+                )
+                if (
+                    token_limit_fallback
+                    and token_limit_fallback not in token_limit_fields_tried
+                ):
+                    self._output_token_limit_field = token_limit_fallback
+                    continue
+
                 if (
                     self._is_unsupported_temperature_error(error)
                     and effective_temperature != 1
@@ -153,6 +172,7 @@ class OCIGenAIClassicLLMService(LLMService):
         prompt: str,
         system_prompt: str | None,
         temperature: float | None,
+        output_token_limit_field: str | None = None,
     ) -> Any:
         try:
             import oci
@@ -166,7 +186,13 @@ class OCIGenAIClassicLLMService(LLMService):
         chat_request = models.GenericChatRequest()
         chat_request.api_format = models.BaseChatRequest.API_FORMAT_GENERIC
         chat_request.messages = self._build_messages(models, prompt, system_prompt)
-        chat_request.max_completion_tokens = self.settings.OCI_GENAI_MAX_OUTPUT_TOKENS
+        self._set_output_token_limit(
+            chat_request=chat_request,
+            token_limit=self.settings.OCI_GENAI_MAX_OUTPUT_TOKENS,
+            output_token_limit_field=(
+                output_token_limit_field or self._output_token_limit_field
+            ),
+        )
         chat_request.temperature = (
             self.settings.OCI_GENAI_TEMPERATURE
             if temperature is None
@@ -181,6 +207,59 @@ class OCIGenAIClassicLLMService(LLMService):
         chat_detail.chat_request = chat_request
         chat_detail.compartment_id = self.settings.OCI_GENAI_COMPARTMENT_OCID
         return chat_detail
+
+    def _initial_output_token_limit_field(self) -> str:
+        return self._output_token_limit_field_for_model(
+            self.settings.OCI_GENAI_MODEL_ID
+        )
+
+    @staticmethod
+    def _output_token_limit_field_for_model(model_id: str | None) -> str:
+        normalized_model_id = (model_id or "").strip().lower()
+
+        if "llama-4" in normalized_model_id or "llama4" in normalized_model_id:
+            return MAX_TOKENS_FIELD
+
+        return MAX_COMPLETION_TOKENS_FIELD
+
+    @staticmethod
+    def _set_output_token_limit(
+        *,
+        chat_request: Any,
+        token_limit: int,
+        output_token_limit_field: str,
+    ) -> None:
+        if output_token_limit_field == MAX_TOKENS_FIELD:
+            chat_request.max_tokens = token_limit
+            return
+
+        chat_request.max_completion_tokens = token_limit
+
+    @staticmethod
+    def _token_limit_fallback_for_error(
+        error: Exception,
+        *,
+        current_field: str,
+    ) -> str | None:
+        error_text = str(error).lower()
+
+        if (
+            current_field == MAX_COMPLETION_TOKENS_FIELD
+            and "maxcompletiontokens" in error_text
+            and "maxtokens" in error_text
+            and "unsupported parameter" in error_text
+        ):
+            return MAX_TOKENS_FIELD
+
+        if (
+            current_field == MAX_TOKENS_FIELD
+            and "maxtokens" in error_text
+            and "maxcompletiontokens" in error_text
+            and "unsupported parameter" in error_text
+        ):
+            return MAX_COMPLETION_TOKENS_FIELD
+
+        return None
 
     @staticmethod
     def _build_messages(

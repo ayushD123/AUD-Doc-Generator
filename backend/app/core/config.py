@@ -74,6 +74,16 @@ class Settings(BaseSettings):
     DEFAULT_AUD_TEMPLATE_PATH: str = "/backend/template/AUD_Editable_Template.docx"
     MAX_SPREADSHEET_ROWS_PER_SHEET: int = 200
     INTERNAL_DEBUG_OUTPUT: bool = False
+    EMAIL_NOTIFICATIONS_ENABLED: bool = True
+    EMAIL_NOTIFICATION_URL: str | None = (
+        "https://apex.oraclecorp.com/pls/apex/basic_learning_01/apka/send-email"
+    )
+    EMAIL_NOTIFICATION_FROM: str = "audacle@oracle.com"
+    EMAIL_NOTIFICATION_DOWNLOAD_BASE_URL: str | None = None
+    EMAIL_NOTIFICATION_TIMEOUT_SECONDS: float = 10.0
+    EMAIL_NOTIFICATION_VERIFY_SSL: bool = True
+    EMAIL_NOTIFICATION_CA_BUNDLE: str | None = None
+    EMAIL_NOTIFICATION_TRUST_ENV: bool = True
     BACKEND_CORS_ORIGINS: list[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -93,6 +103,9 @@ class Settings(BaseSettings):
         "ORACLE_DB_ECHO",
         "ORACLE_DB_POOL_PRE_PING",
         "AUTO_CREATE_TABLES",
+        "EMAIL_NOTIFICATIONS_ENABLED",
+        "EMAIL_NOTIFICATION_VERIFY_SSL",
+        "EMAIL_NOTIFICATION_TRUST_ENV",
         mode="before",
     )
     @classmethod
