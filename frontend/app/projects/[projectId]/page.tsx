@@ -208,7 +208,7 @@ function buildPendingUploadedFile(
   file: File,
 ): UploadedFileListItem {
   return {
-    id: `${pendingUploadIdPrefix}${crypto.randomUUID()}`,
+    id: `${pendingUploadIdPrefix}${createPendingUploadId()}`,
     project_id: projectId,
     original_filename: file.name || "uploaded_file",
     file_type: getClientFileType(file.name),
@@ -217,6 +217,18 @@ function buildPendingUploadedFile(
     created_at: new Date().toISOString(),
     uploadStatus: "pending",
   };
+}
+
+function createPendingUploadId() {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {
+    // Public HTTP deployments may not expose crypto.randomUUID().
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
 function isPendingUploadedFile(uploadedFile: UploadedFileListItem) {

@@ -49,6 +49,41 @@ sudo ufw status verbose
 
 If you are using SSH tunnels only, skip the `80` and `443` rules.
 
+Some Oracle-provided Ubuntu images do not have UFW installed and instead ship
+with iptables rules that allow SSH but reject other new inbound traffic. If
+Nginx works on `127.0.0.1` and the VM private IP but the public IP still refuses
+port `80`, check the host firewall:
+
+```bash
+sudo -n ss -ltnp | grep ':80'
+sudo -n iptables -S INPUT
+```
+
+If `iptables -S INPUT` shows an early SSH allow rule followed by
+`REJECT --reject-with icmp-host-prohibited`, add an HTTP allow rule before the
+reject:
+
+```bash
+sudo -n iptables -I INPUT 5 -p tcp -m state --state NEW -m tcp --dport 80 -j ACCEPT
+sudo -n iptables -S INPUT
+```
+
+Verify from your local machine:
+
+```powershell
+Test-NetConnection <vm-public-ip> -Port 80
+```
+
+If it succeeds, make the rule persistent before relying on the deployment after
+a reboot:
+
+```bash
+sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y iptables-persistent
+sudo -n netfilter-persistent save
+```
+
+For HTTPS later, add the same style of rule for port `443`.
+
 ## 3. Create an App User and Directories
 
 SSH to the VM, then create a dedicated app user and persistent data directory:
@@ -403,6 +438,17 @@ Expected results:
 - `/health/db` returns `status=ok`, `can_connect=true`, and SQLite dialect.
 - Frontend HTML is returned from port `3000`.
 - Nginx path `/api/health` reaches the backend.
+
+If public access fails but local/private-IP access works, watch the Nginx logs
+while testing from your laptop:
+
+```bash
+sudo -n tail -f /var/log/nginx/access.log /var/log/nginx/error.log
+```
+
+No new log line usually means the request is blocked before Nginx. Check OCI
+NSG/security-list rules first, then the host firewall rules described in
+section 2.
 
 ## 12. Monitor From Your Local System
 
